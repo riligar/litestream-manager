@@ -24,10 +24,11 @@ import (
 // addr is the bind address for the web server.
 // addr will be set based on the port flag
 
-// DatabaseManager gerencia múltiplas instâncias do Litestream
+// DatabaseManager gerencia instâncias do Litestream (1 banco por cliente)
 type DatabaseManager struct {
-	databases   map[string]*litestream.DB
-	configs     map[string]*DatabaseConfig
+	databases   map[string]*litestream.DB  // clientID -> litestream.DB
+	clients     map[string]*ClientConfig   // clientID -> config  
+	pathIndex   map[string]string          // dbPath -> clientID (index para lookups)
 	watcher     *fsnotify.Watcher
 	mutex       sync.RWMutex
 	bucket      string
@@ -36,11 +37,10 @@ type DatabaseManager struct {
 	cancel      context.CancelFunc
 }
 
-// DatabaseConfig configuração por banco/cliente
-type DatabaseConfig struct {
+// ClientConfig configuração otimizada para 1:1 cliente:banco
+type ClientConfig struct {
 	ClientID     string    `json:"clientId"`
 	DatabasePath string    `json:"databasePath"`
-	S3Path       string    `json:"s3Path"`
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
@@ -145,7 +145,7 @@ func isValidGUID(s string) bool {
 	return true
 }
 
-// NewDatabaseManager cria novo gerenciador de bancos
+// NewDatabaseManager cria novo gerenciador otimizado (1:1 cliente:banco)
 func NewDatabaseManager(bucket string, watchDirs []string) *DatabaseManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	
@@ -155,8 +155,9 @@ func NewDatabaseManager(bucket string, watchDirs []string) *DatabaseManager {
 	}
 
 	return &DatabaseManager{
-		databases: make(map[string]*litestream.DB),
-		configs:   make(map[string]*DatabaseConfig),
+		databases: make(map[string]*litestream.DB),   // clientID -> DB
+		clients:   make(map[string]*ClientConfig),    // clientID -> config
+		pathIndex: make(map[string]string),           // path -> clientID
 		watcher:   watcher,
 		bucket:    bucket,
 		watchDirs: watchDirs,
@@ -183,7 +184,7 @@ func (dm *DatabaseManager) Start() error {
 	return dm.scanExistingDatabases()
 }
 
-// Stop para o gerenciador
+// Stop para o gerenciador (1:1 otimizado)
 func (dm *DatabaseManager) Stop() {
 	dm.cancel()
 	dm.watcher.Close()
@@ -191,10 +192,10 @@ func (dm *DatabaseManager) Stop() {
 	dm.mutex.Lock()
 	defer dm.mutex.Unlock()
 	
-	for path, db := range dm.databases {
+	// Iteração otimizada usando clientID como chave
+	for clientID, db := range dm.databases {
 		db.SoftClose()
-		config := dm.configs[path]
-		log.Printf("❌ Stopped replication: %s", config.ClientID)
+		log.Printf("❌ Stopped replication: %s", clientID)
 	}
 	
 	log.Printf("📁 Database manager stopped")
@@ -270,39 +271,41 @@ func (dm *DatabaseManager) isDatabaseFile(filename string) bool {
 	return ext == ".db" || ext == ".sqlite" || ext == ".sqlite3"
 }
 
-// registerDatabase registra novo banco
+// registerDatabase registra novo cliente (1:1 otimizado)
 func (dm *DatabaseManager) registerDatabase(dbPath string) error {
 	dm.mutex.Lock()
 	defer dm.mutex.Unlock()
-
-	// Verifica se já existe
-	if _, exists := dm.databases[dbPath]; exists {
-		return fmt.Errorf("database already registered: %s", dbPath)
-	}
 
 	// Extrai GUID do filename
 	clientID := extractClientID(dbPath)
 	if clientID == "" {
 		return fmt.Errorf("invalid GUID format in filename: %s", filepath.Base(dbPath))
 	}
+
+	// Verifica se cliente já existe (usar clientID como chave primária)
+	if _, exists := dm.databases[clientID]; exists {
+		return fmt.Errorf("client already registered: %s", clientID)
+	}
+
+	// Verifica se path já está mapeado
+	if existingClientID, exists := dm.pathIndex[dbPath]; exists {
+		return fmt.Errorf("path already mapped to client: %s -> %s", dbPath, existingClientID)
+	}
 	
-	s3Path := fmt.Sprintf("databases/%s", clientID)
-	
-	// Cria configuração
-	config := &DatabaseConfig{
+	// Cria configuração otimizada
+	config := &ClientConfig{
 		ClientID:     clientID,
 		DatabasePath: dbPath,
-		S3Path:       s3Path,
 		CreatedAt:    time.Now(),
 	}
 
 	// Cria instância Litestream
 	lsdb := litestream.NewDB(dbPath)
 	
-	// Configura S3
+	// Configura S3 (path inline para performance)
 	client := lss3.NewReplicaClient()
 	client.Bucket = dm.bucket
-	client.Path = s3Path
+	client.Path = fmt.Sprintf("databases/%s", clientID)
 
 	replica := litestream.NewReplica(lsdb, "s3")
 	replica.Client = client
@@ -313,36 +316,39 @@ func (dm *DatabaseManager) registerDatabase(dbPath string) error {
 		return fmt.Errorf("failed to open database %s: %v", dbPath, err)
 	}
 
-	// Registra
-	dm.databases[dbPath] = lsdb
-	dm.configs[dbPath] = config
+	// Registra usando clientID como chave primária
+	dm.databases[clientID] = lsdb
+	dm.clients[clientID] = config
+	dm.pathIndex[dbPath] = clientID
 
-	log.Printf("✅ Client registered: %s -> s3://%s/%s/", 
-		clientID, dm.bucket, s3Path)
+	log.Printf("✅ Client registered: %s -> s3://%s/databases/%s/", 
+		clientID, dm.bucket, clientID)
 
 	return nil
 }
 
-// unregisterDatabase remove banco
+// unregisterDatabase remove cliente (1:1 otimizado) 
 func (dm *DatabaseManager) unregisterDatabase(dbPath string) error {
 	dm.mutex.Lock()
 	defer dm.mutex.Unlock()
 
-	lsdb, exists := dm.databases[dbPath]
+	// Lookup otimizado via pathIndex
+	clientID, exists := dm.pathIndex[dbPath]
 	if !exists {
-		return fmt.Errorf("database not found: %s", dbPath)
+		return fmt.Errorf("database path not found: %s", dbPath)
 	}
 
-	config := dm.configs[dbPath]
+	lsdb := dm.databases[clientID] // O(1) lookup
 	
 	// Para replicação
 	lsdb.SoftClose()
 	
-	// Remove dos mapas
-	delete(dm.databases, dbPath)
-	delete(dm.configs, dbPath)
+	// Remove de todos os mapas
+	delete(dm.databases, clientID)
+	delete(dm.clients, clientID)
+	delete(dm.pathIndex, dbPath)
 
-	log.Printf("❌ Client unregistered: %s", config.ClientID)
+	log.Printf("❌ Client unregistered: %s", clientID)
 
 	return nil
 }
@@ -486,17 +492,18 @@ func startStatusServer(dm *DatabaseManager, addr string) {
     </div>
     
     <h2>📊 Active Clients</h2>`, 
-			dm.bucket, dm.watchDirs, len(dm.configs), len(dm.watchDirs), time.Since(time.Now().Add(-time.Hour)).Truncate(time.Second))
+			dm.bucket, dm.watchDirs, len(dm.clients), len(dm.watchDirs), time.Since(time.Now().Add(-time.Hour)).Truncate(time.Second))
 		
-		if len(dm.configs) == 0 {
+		if len(dm.clients) == 0 {
 			fmt.Fprintf(w, `<p style="text-align: center; color: #6c757d; margin: 40px;">
 				No clients found. Create a GUID.db file in the watched directories to get started.
 			</p>`)
 		} else {
-			for path, config := range dm.configs {
+			// Iteração otimizada usando clientID como chave primária
+			for clientID, config := range dm.clients {
 				status := "🟢 Active"
-				if _, exists := dm.databases[path]; !exists {
-					status = "🔴 Inactive"
+				if _, exists := dm.databases[clientID]; !exists {
+					status = "🔴 Inactive" 
 				}
 				
 				fmt.Fprintf(w, `
@@ -506,13 +513,13 @@ func startStatusServer(dm *DatabaseManager, addr string) {
 						<span>%s</span>
 					</div>
 					<div class="path">📁 %s</div>
-					<div class="s3-path">☁️  s3://%s/%s/</div>
+					<div class="s3-path">☁️  s3://%s/databases/%s/</div>
 					<div style="color: #6c757d; font-size: 0.8em; margin-top: 8px;">
 						⏰ Created: %s
 					</div>
 				</div>`,
-					config.ClientID, status, config.DatabasePath, 
-					dm.bucket, config.S3Path,
+					clientID, status, config.DatabasePath, 
+					dm.bucket, clientID,
 					config.CreatedAt.Format("2006-01-02 15:04:05"))
 			}
 		}
@@ -537,17 +544,20 @@ func startStatusServer(dm *DatabaseManager, addr string) {
 		
 		w.Header().Set("Content-Type", "application/json")
 		
-		clients := make([]map[string]interface{}, 0, len(dm.configs))
-		for path, config := range dm.configs {
+		// Pre-allocate para melhor performance
+		clients := make([]map[string]interface{}, 0, len(dm.clients))
+		
+		// Iteração otimizada usando clientID
+		for clientID, config := range dm.clients {
 			status := "active"
-			if _, exists := dm.databases[path]; !exists {
+			if _, exists := dm.databases[clientID]; !exists {
 				status = "inactive"
 			}
 			
 			clients = append(clients, map[string]interface{}{
-				"clientId":     config.ClientID,
+				"clientId":     clientID,
 				"databasePath": config.DatabasePath,
-				"s3Path":       config.S3Path,
+				"s3Path":       fmt.Sprintf("databases/%s", clientID), // inline para performance
 				"status":       status,
 				"createdAt":    config.CreatedAt,
 			})
@@ -556,8 +566,8 @@ func startStatusServer(dm *DatabaseManager, addr string) {
 		response := map[string]interface{}{
 			"bucket":          dm.bucket,
 			"watchDirs":       dm.watchDirs,
-			"totalClients":    len(dm.configs),
-			"activeClients":   len(dm.databases),
+			"totalClients":    len(dm.clients),    // otimizado
+			"activeClients":   len(dm.databases),  // já usa clientID
 			"clients":         clients,
 		}
 		
