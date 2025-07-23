@@ -1,4 +1,4 @@
-module github.com/benbjohnson/litestream-library-example
+module github.com/benbjohnson/litestream-manager
 
 go 1.16
 
