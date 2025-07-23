@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -51,6 +52,26 @@ func (fw *filteredWriter) Write(p []byte) (n int, err error) {
 // addr is the bind address for the web server.
 // addr will be set based on the port flag
 
+// startTime armazena quando o servidor foi iniciado
+var startTime time.Time
+
+// formatUptime formata o uptime de forma amigável
+func formatUptime() string {
+	duration := time.Since(startTime)
+	
+	days := int(duration.Hours()) / 24
+	hours := int(duration.Hours()) % 24
+	minutes := int(duration.Minutes()) % 60
+	
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh", days, hours)
+	} else if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	} else {
+		return fmt.Sprintf("%dm", minutes)
+	}
+}
+
 // DatabaseManager gerencia instâncias do Litestream (1 banco por cliente)
 type DatabaseManager struct {
 	databases   map[string]*litestream.DB  // clientID -> litestream.DB
@@ -76,6 +97,7 @@ type DashboardData struct {
 	Bucket        string       `json:"bucket"`
 	WatchDirCount int          `json:"watchDirCount"`
 	ClientCount   int          `json:"clientCount"`
+	Uptime        string       `json:"uptime"`
 	Clients       []ClientData `json:"clients"`
 }
 
@@ -98,6 +120,9 @@ func main() {
 func run() error {
 	// Configura logger para filtrar mensagens técnicas do Litestream
 	log.SetOutput(&filteredWriter{writer: os.Stdout})
+
+	// Inicializa tempo de start do servidor
+	startTime = time.Now()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
@@ -521,9 +546,16 @@ func startStatusServer(dm *DatabaseManager, addr string) {
 		
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		
-		// Preparar dados para o template
+		// Preparar dados para o template (ordenado por clientID)
+		clientIDs := make([]string, 0, len(dm.clients))
+		for clientID := range dm.clients {
+			clientIDs = append(clientIDs, clientID)
+		}
+		sort.Strings(clientIDs) // Ordena alfabeticamente
+		
 		var clients []ClientData
-		for clientID, config := range dm.clients {
+		for _, clientID := range clientIDs {
+			config := dm.clients[clientID]
 			statusClass := "status-active"
 			statusText := "ACTIVE"
 			if _, exists := dm.databases[clientID]; !exists {
@@ -544,6 +576,7 @@ func startStatusServer(dm *DatabaseManager, addr string) {
 			Bucket:        dm.bucket,
 			WatchDirCount: len(dm.watchDirs),
 			ClientCount:   len(dm.clients),
+			Uptime:        formatUptime(),
 			Clients:       clients,
 		}
 		
@@ -559,11 +592,18 @@ func startStatusServer(dm *DatabaseManager, addr string) {
 		
 		w.Header().Set("Content-Type", "application/json")
 		
-		// Pre-allocate para melhor performance
+		// Pre-allocate para melhor performance (ordenado)
+		clientIDs := make([]string, 0, len(dm.clients))
+		for clientID := range dm.clients {
+			clientIDs = append(clientIDs, clientID)
+		}
+		sort.Strings(clientIDs) // Ordena alfabeticamente
+		
 		clients := make([]map[string]interface{}, 0, len(dm.clients))
 		
-		// Iteração otimizada usando clientID
-		for clientID, config := range dm.clients {
+		// Iteração otimizada usando clientID ordenado
+		for _, clientID := range clientIDs {
+			config := dm.clients[clientID]
 			status := "active"
 			if _, exists := dm.databases[clientID]; !exists {
 				status = "inactive"
