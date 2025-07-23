@@ -43,7 +43,11 @@ litestream-library-example -dsn /path/to/db -bucket YOURBUCKETNAME
   go run main.go -watch-dir "data/clients" -bucket applications-backups-prod
   
   # Custom port (useful for avoiding conflicts or running multiple instances)
-  go run main.go -watch-dir "data/clients" -bucket applications-backups-prod -port 9090
+  go run main.go -watch-dir "data" -bucket applications-backups-prod
+  go run main.go -watch-dir "data" -bucket applications-backups-prod -port 9090
+
+  touch data/80268c6d-db74-43c5-bae1-2834df182d2d.db
+  rm -rf data/80268c6d-db74-43c5-bae1-2834df182d2d.db
   ```
 
 On your first run, it will see that there is no snapshot available so the
