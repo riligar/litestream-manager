@@ -107,7 +107,9 @@ litestream restore \
 2. **Descoberta**: Escaneia arquivos `.db` existentes com GUID válido
 3. **Configuração**: Para cada banco detectado:
    - Cria configuração Litestream única
-   - Inicia processo de backup contínuo
+   - **Se S3 vazio**: Inicia backup inicial completo
+   - **Se S3 existe**: Sincroniza com backup existente (continua de onde parou)
+   - Inicia processo de backup contínuo (WAL streaming)
    - Registra cliente no sistema (O(1) lookup)
 4. **Monitoramento**: File watcher detecta mudanças em tempo real:
    - **CREATE**: Novo `.db` → adiciona cliente automaticamente
