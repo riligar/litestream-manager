@@ -99,21 +99,24 @@ litestream restore \
 - **Memória**: 30-150MB otimizada
 - **File Watcher**: fsnotify nativo (sub-milissegundo)
 
-## 🚨 Problemas Comuns
+## 🔄 Fluxo de Trabalho
 
-```bash
-# Diretório não existe
-❌ directory does not exist: /data/
-✅ mkdir -p data/clients
+**Step by Step do Servidor:**
 
-# Porta ocupada  
-❌ listen tcp :8080: bind: address already in use
-✅ ./litestream-manager -watch-dir "data" -bucket "backups" -port 9090
+1. **Inicialização**: Valida diretórios e inicia file watcher
+2. **Descoberta**: Escaneia arquivos `.db` existentes com GUID válido
+3. **Configuração**: Para cada banco detectado:
+   - Cria configuração Litestream única
+   - Inicia processo de backup contínuo
+   - Registra cliente no sistema (O(1) lookup)
+4. **Monitoramento**: File watcher detecta mudanças em tempo real:
+   - **CREATE**: Novo `.db` → adiciona cliente automaticamente
+   - **DELETE**: Remove `.db` → para backup e limpa registros
+   - **MODIFY**: Atualiza estatísticas de tamanho
+5. **Dashboard**: Interface web atualiza dados em tempo real
+6. **Backup S3**: Litestream replica continuamente para `s3://bucket/databases/{clientID}/`
 
-# GUID inválido
-❌ arquivo-123.db (ignorado)
-✅ 12345678-1234-5678-9abc-123456789012.db
-```
+**Fluxo Otimizado**: Detecção sub-milissegundo → Backup automático → Dashboard em tempo real
 
 ## 🎯 Exemplo Completo
 
