@@ -2,6 +2,27 @@
 
 Sistema de backup automático para SQLite com suporte a múltiplos clientes baseados em GUID.
 
+## 🔄 Fluxo de Trabalho
+
+**Step by Step do Servidor:**
+
+1. **Inicialização**: Valida diretórios e inicia file watcher
+2. **Descoberta**: Escaneia arquivos `.db` existentes com GUID válido
+3. **Configuração**: Para cada banco detectado:
+   - Cria configuração Litestream única
+   - **Se S3 vazio**: Inicia backup inicial completo
+   - **Se S3 existe**: Sincroniza com backup existente (continua de onde parou)
+   - Inicia processo de backup contínuo (WAL streaming)
+   - Registra cliente no sistema (O(1) lookup)
+4. **Monitoramento**: File watcher detecta mudanças em tempo real:
+   - **CREATE**: Novo `.db` → adiciona cliente automaticamente
+   - **DELETE**: Remove `.db` → para backup e limpa registros
+   - **MODIFY**: Atualiza estatísticas de tamanho
+5. **Dashboard**: Interface web atualiza dados em tempo real
+6. **Backup S3**: Litestream replica continuamente para `s3://bucket/databases/{clientID}/`
+
+**Fluxo Otimizado**: Detecção sub-milissegundo → Backup automático → Dashboard em tempo real
+
 ## 🚀 Instalação
 
 ```bash
@@ -98,27 +119,6 @@ litestream restore \
 - **Lookup**: O(1) para todas as operações  
 - **Memória**: 30-150MB otimizada
 - **File Watcher**: fsnotify nativo (sub-milissegundo)
-
-## 🔄 Fluxo de Trabalho
-
-**Step by Step do Servidor:**
-
-1. **Inicialização**: Valida diretórios e inicia file watcher
-2. **Descoberta**: Escaneia arquivos `.db` existentes com GUID válido
-3. **Configuração**: Para cada banco detectado:
-   - Cria configuração Litestream única
-   - **Se S3 vazio**: Inicia backup inicial completo
-   - **Se S3 existe**: Sincroniza com backup existente (continua de onde parou)
-   - Inicia processo de backup contínuo (WAL streaming)
-   - Registra cliente no sistema (O(1) lookup)
-4. **Monitoramento**: File watcher detecta mudanças em tempo real:
-   - **CREATE**: Novo `.db` → adiciona cliente automaticamente
-   - **DELETE**: Remove `.db` → para backup e limpa registros
-   - **MODIFY**: Atualiza estatísticas de tamanho
-5. **Dashboard**: Interface web atualiza dados em tempo real
-6. **Backup S3**: Litestream replica continuamente para `s3://bucket/databases/{clientID}/`
-
-**Fluxo Otimizado**: Detecção sub-milissegundo → Backup automático → Dashboard em tempo real
 
 ## 🎯 Exemplo Completo
 
