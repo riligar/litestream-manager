@@ -276,8 +276,10 @@ func (dm *DatabaseManager) handleFileEvent(event fsnotify.Event) {
 		log.Printf("📁 Database created: %s", event.Name)
 		dm.registerDatabase(event.Name)
 	case event.Op&fsnotify.Remove == fsnotify.Remove:
-		log.Printf("🗑️  Database removed: %s", event.Name)
-		dm.unregisterDatabase(event.Name)
+		if dm.isDatabaseFile(event.Name) {
+			log.Printf("🗑️  Database removed: %s", event.Name) 
+			dm.unregisterDatabase(event.Name)
+		}
 	case event.Op&fsnotify.Write == fsnotify.Write:
 		// Arquivo modificado - já está sendo replicado
 	}
@@ -287,6 +289,14 @@ func (dm *DatabaseManager) handleFileEvent(event fsnotify.Event) {
 func (dm *DatabaseManager) isDatabaseFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 	return ext == ".db" || ext == ".sqlite" || ext == ".sqlite3"
+}
+
+// isClientRegistered verifica se cliente já está registrado
+func (dm *DatabaseManager) isClientRegistered(clientID string) bool {
+	dm.mutex.RLock()
+	defer dm.mutex.RUnlock()
+	_, exists := dm.databases[clientID]
+	return exists
 }
 
 // registerDatabase registra novo cliente (1:1 otimizado)
@@ -353,13 +363,14 @@ func (dm *DatabaseManager) unregisterDatabase(dbPath string) error {
 	// Lookup otimizado via pathIndex
 	clientID, exists := dm.pathIndex[dbPath]
 	if !exists {
-		return fmt.Errorf("database path not found: %s", dbPath)
+		return nil // Silencioso se não existe
 	}
 
-	lsdb := dm.databases[clientID] // O(1) lookup
-	
-	// Para replicação
-	lsdb.SoftClose()
+	lsdb, dbExists := dm.databases[clientID] // O(1) lookup
+	if dbExists {
+		// Para replicação imediatamente 
+		lsdb.Close()
+	}
 	
 	// Remove de todos os mapas
 	delete(dm.databases, clientID)
@@ -380,8 +391,11 @@ func (dm *DatabaseManager) scanExistingDatabases() error {
 			}
 			
 			if !info.IsDir() && dm.isDatabaseFile(path) {
-				if err := dm.registerDatabase(path); err != nil {
-					log.Printf("⚠️  Failed to register existing database %s: %v", path, err)
+				clientID := extractClientID(path)
+				if clientID != "" && !dm.isClientRegistered(clientID) {
+					if err := dm.registerDatabase(path); err != nil {
+						log.Printf("⚠️  Failed to register existing database %s: %v", path, err)
+					}
 				}
 			}
 			return nil
