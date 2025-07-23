@@ -34,6 +34,10 @@ You'll need to setup an S3 bucket and use that name when running the app.
 litestream-library-example -dsn /path/to/db -bucket YOURBUCKETNAME
 ```
 
+```sh
+go run main.go -dsn data/2025-07-23.db -bucket applications-backups-prod
+```
+
 On your first run, it will see that there is no snapshot available so the
 application will create a new database. If you restart the application then
 it will see the local database and use that.
