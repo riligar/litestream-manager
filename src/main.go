@@ -623,6 +623,7 @@ func startStatusServer(dm *DatabaseManager, addr string) {
 			"watchDirs":       dm.watchDirs,
 			"totalClients":    len(dm.clients),    // otimizado
 			"activeClients":   len(dm.databases),  // já usa clientID
+			"uptime":          formatUptime(),
 			"clients":         clients,
 		}
 		
