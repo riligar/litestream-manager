@@ -4,6 +4,20 @@ Sistema de backup automático para SQLite usando Litestream como biblioteca, com
 
 ## 🚀 Instalação
 
+### Gerar Executável (Recomendado)
+```bash
+# Compilar para arquivo executável
+go build -o litestream-manager main.go
+
+# Usar o executável diretamente
+./litestream-manager -watch-dir "data/clients" -bucket "seu-bucket"
+
+# Para outros sistemas operacionais:
+# Windows: GOOS=windows GOARCH=amd64 go build -o litestream-manager.exe main.go
+# Linux:   GOOS=linux GOARCH=amd64 go build -o litestream-manager-linux main.go
+```
+
+### Instalação Global (Opcional)
 ```bash
 go install .
 ```
@@ -22,7 +36,7 @@ export AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 mkdir -p data/clients
 
 # Iniciar monitoramento automático
-go run main.go -watch-dir "data/clients" -bucket "seu-bucket-s3"
+./litestream-manager -watch-dir "data/clients" -bucket "seu-bucket-s3"
 
 # Acessar dashboard: http://localhost:8080
 ```
@@ -52,7 +66,7 @@ touch data/clients/12345678-1234-5678-9abc-123456789012.db
 ```bash
 # Uma instância monitora todos os clientes
 mkdir -p data/clients
-go run main.go -watch-dir "data/clients" -bucket "saas-backups"
+./litestream-manager -watch-dir "data/clients" -bucket "saas-backups"
 
 # Estrutura local:
 # data/clients/
@@ -70,19 +84,19 @@ go run main.go -watch-dir "data/clients" -bucket "saas-backups"
 ### Múltiplos Ambientes
 ```bash
 # Produção
-go run main.go -watch-dir "data/prod" -bucket "prod-backups" -port 8080
+./litestream-manager -watch-dir "data/prod" -bucket "prod-backups" -port 8080
 
 # Staging  
-go run main.go -watch-dir "data/staging" -bucket "staging-backups" -port 8081
+./litestream-manager -watch-dir "data/staging" -bucket "staging-backups" -port 8081
 
 # Desenvolvimento
-go run main.go -watch-dir "data/dev" -bucket "dev-backups" -port 8082
+./litestream-manager -watch-dir "data/dev" -bucket "dev-backups" -port 8082
 ```
 
 ### Sistema Legado
 ```bash
 # Banco único com nome personalizado
-go run main.go -dsn "data/legacy.db" -bucket "backups" -db-name "sistema-antigo"
+./litestream-manager -dsn "data/legacy.db" -bucket "backups" -db-name "sistema-antigo"
 ```
 
 ## 🔍 Regras de Nomenclatura
@@ -186,7 +200,7 @@ litestream restore \
 ### Porta em uso
 ```bash
 ❌ listen tcp :8080: bind: address already in use
-✅ go run main.go -watch-dir "data" -bucket "backups" -port 9090
+✅ ./litestream-manager -watch-dir "data" -bucket "backups" -port 9090
 ```
 
 ### GUID inválido
@@ -206,7 +220,7 @@ export AWS_SECRET_ACCESS_KEY=your-secret
 mkdir -p data/clients
 
 # 3. Iniciar sistema
-go run main.go -watch-dir "data/clients" -bucket "company-backups"
+./litestream-manager -watch-dir "data/clients" -bucket "company-backups"
 
 # 4. Adicionar clientes  
 touch data/clients/12345678-1234-5678-9abc-123456789012.db
