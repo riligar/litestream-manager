@@ -57,8 +57,6 @@ touch data/clients/12345678-1234-5678-9abc-123456789012.db
 | `-watch-dir` | Diretórios para monitorar (separados por vírgula) | `"data/clients,data/prod"` |
 | `-bucket` | Bucket S3 para backup | `"company-backups"` |
 | `-port` | Porta do servidor web | `8080` (padrão) |
-| `-dsn` | Modo legado: arquivo único | `"/data/single.db"` |
-| `-db-name` | Nome personalizado no S3 | `"legacy-system"` |
 
 ## 🎯 Casos de Uso
 
@@ -93,11 +91,7 @@ mkdir -p data/clients
 ./litestream-manager -watch-dir "data/dev" -bucket "dev-backups" -port 8082
 ```
 
-### Sistema Legado
-```bash
-# Banco único com nome personalizado
-./litestream-manager -dsn "data/legacy.db" -bucket "backups" -db-name "sistema-antigo"
-```
+
 
 ## 🔍 Regras de Nomenclatura
 

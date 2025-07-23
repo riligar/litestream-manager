@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -61,9 +60,7 @@ func run() error {
 	bucket := flag.String("bucket", "", "s3 replica bucket")
 	port := flag.String("port", "8080", "port for the web server (default: 8080)")
 	
-	// Legacy support for single database
-	dsn := flag.String("dsn", "", "datasource name (legacy mode)")
-	dbName := flag.String("db-name", "", "database name for organizing in S3 (optional)")
+
 	
 	flag.Parse()
 	
@@ -75,16 +72,14 @@ func run() error {
 		flag.Usage()
 		return fmt.Errorf("required: -bucket NAME")
 	}
-
-	// Choose mode: directory watching (new) or single database (legacy)
-	if *watchDir != "" {
-		return runDirectoryMode(ctx, *watchDir, *bucket, addr)
-	} else if *dsn != "" {
-		return runLegacyMode(ctx, *dsn, *bucket, *dbName, addr)
-	} else {
+	
+	if *watchDir == "" {
 		flag.Usage()
-		return fmt.Errorf("required: -watch-dir PATH or -dsn PATH")
+		return fmt.Errorf("required: -watch-dir PATH")
 	}
+
+	// Run directory watching mode
+	return runDirectoryMode(ctx, *watchDir, *bucket, addr)
 }
 
 // runDirectoryMode runs the new multi-database directory watching mode
@@ -120,72 +115,22 @@ func runDirectoryMode(ctx context.Context, watchDirStr, bucket, addr string) err
 	return nil
 }
 
-// runLegacyMode runs the original single database mode
-func runLegacyMode(ctx context.Context, dsn, bucket, dbName, addr string) error {
-	fmt.Println("🗄️  Litestream Single Database (Legacy Mode)")
-	fmt.Println("==========================================")
-	
-	finalDbName := getDatabaseName(dsn, dbName)
-	
-	// Create a Litestream DB and attached replica to manage background replication.
-	lsdb, err := replicate(ctx, dsn, bucket, finalDbName)
-	if err != nil {
-		return err
-	}
-	defer lsdb.SoftClose()
 
-	// Open database file.
-	db, err := sql.Open("sqlite3", dsn)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
 
-	// Create table for storing page views.
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS page_views (id INTEGER PRIMARY KEY, timestamp TEXT);`); err != nil {
-		return fmt.Errorf("cannot create table: %w", err)
-	}
-
-	// Run web server.
-	fmt.Printf("🌐 Status Server: http://localhost%s\n", addr)
-	fmt.Printf("📁 Database: %s -> s3://%s/databases/%s/\n", dsn, bucket, finalDbName)
-	fmt.Println()
-	
-	go http.ListenAndServe(addr,
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			handleLegacyRequest(w, r, db, lsdb, finalDbName)
-		}),
-	)
-
-	// Wait for signal.
-	<-ctx.Done()
-	log.Print("litestream received signal, shutting down")
-
-	return nil
-}
-
-// getDatabaseName extracts GUID from database filename for S3 organization
+// extractClientID extracts GUID from database filename for S3 organization
 // Expected format: /data/12345678-1234-5678-9abc-123456789012.db
-func getDatabaseName(dsn, providedName string) string {
-	if providedName != "" {
-		return sanitizeName(providedName)
-	}
-
-	// Extract filename from DSN path
-	base := filepath.Base(dsn)
+func extractClientID(dbPath string) string {
+	// Extract filename from path
+	base := filepath.Base(dbPath)
 	guid := strings.TrimSuffix(base, filepath.Ext(base))
 	
-	// Validate GUID format (basic validation)
+	// Validate GUID format
 	if isValidGUID(guid) {
 		return guid
 	}
 	
-	// Fallback for non-GUID names
-	if guid == "" || guid == "." {
-		guid = "default"
-	}
-
-	return sanitizeName(guid)
+	// Return empty string for invalid GUIDs - will be ignored
+	return ""
 }
 
 // isValidGUID validates if string follows GUID pattern
@@ -336,7 +281,11 @@ func (dm *DatabaseManager) registerDatabase(dbPath string) error {
 	}
 
 	// Extrai GUID do filename
-	clientID := getDatabaseName(dbPath, "")
+	clientID := extractClientID(dbPath)
+	if clientID == "" {
+		return fmt.Errorf("invalid GUID format in filename: %s", filepath.Base(dbPath))
+	}
+	
 	s3Path := fmt.Sprintf("databases/%s", clientID)
 	
 	// Cria configuração
@@ -427,20 +376,7 @@ func (dm *DatabaseManager) scanExistingDatabases() error {
 	return nil
 }
 
-// sanitizeName ensures the name is safe for use as S3 path
-func sanitizeName(name string) string {
-	// Replace invalid characters with underscores
-	safe := strings.ReplaceAll(name, " ", "_")
-	safe = strings.ReplaceAll(safe, "/", "_")
-	safe = strings.ReplaceAll(safe, "\\", "_")
-	safe = strings.ToLower(safe)
-	
-	if safe == "" {
-		safe = "default"
-	}
-	
-	return safe
-}
+
 
 func replicate(ctx context.Context, dsn, bucket, dbName string) (*litestream.DB, error) {
 	// Create Litestream DB reference for managing replication.
@@ -502,72 +438,7 @@ func restore(ctx context.Context, replica *litestream.Replica) (err error) {
 	return nil
 }
 
-// handleLegacyRequest processa requests HTTP no modo legado
-func handleLegacyRequest(w http.ResponseWriter, r *http.Request, db *sql.DB, lsdb *litestream.DB, dbName string) {
-	// Start a transaction.
-	tx, err := db.Begin()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer tx.Rollback()
 
-	// Store page view.
-	if _, err := tx.ExecContext(r.Context(), `INSERT INTO page_views (timestamp) VALUES (?);`, time.Now().Format(time.RFC3339)); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Sync litestream with current state.
-	if err := lsdb.Sync(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Grab current position.
-	pos, err := lsdb.Pos()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Read total page views.
-	var n int
-	if err := tx.QueryRowContext(r.Context(), `SELECT COUNT(1) FROM page_views;`).Scan(&n); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Commit transaction.
-	if err := tx.Commit(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Sync litestream with current state again.
-	if err := lsdb.Sync(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Grab new transaction position.
-	newPos, err := lsdb.Pos()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Sync litestream with S3.
-	startTime := time.Now()
-	if err := lsdb.Replicas[0].Sync(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	log.Printf("new transaction: db=%s pre=%s post=%s elapsed=%s", dbName, pos.String(), newPos.String(), time.Since(startTime))
-
-	// Print total page views.
-	fmt.Fprintf(w, "Database: %s\nThis server has been visited %d times.\n", dbName, n)
-}
 
 // startStatusServer inicia servidor de status para modo diretório
 func startStatusServer(dm *DatabaseManager, addr string) {
