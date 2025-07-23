@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -23,6 +24,9 @@ import (
 	"github.com/fsnotify/fsnotify"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+//go:embed template.html
+var templateContent string
 
 // Logger personalizado que filtra mensagens técnicas do Litestream
 type filteredWriter struct {
@@ -163,7 +167,7 @@ func runDirectoryMode(ctx context.Context, watchDirStr, bucket, addr string) err
 		watchDirs[i] = strings.TrimSpace(dir)
 	}
 
-	fmt.Println("🏢 Litestream Multi-Client Manager (Directory Mode)")
+	fmt.Println("🏢 Litestream Multi-Client Manager")
 	fmt.Println("===============================================")
 	fmt.Printf("📦 S3 Bucket: %s\n", bucket)
 	fmt.Printf("👀 Watching Directories: %v\n", watchDirs)
@@ -534,10 +538,10 @@ func restore(ctx context.Context, replica *litestream.Replica) (err error) {
 
 // startStatusServer inicia servidor de status usando template HTML
 func startStatusServer(dm *DatabaseManager, addr string) {
-	// Parse template
-	tmpl, err := template.ParseFiles("src/template.html")
+	// Parse embedded template
+	tmpl, err := template.New("dashboard").Parse(templateContent)
 	if err != nil {
-		log.Fatal("Failed to parse template:", err)
+		log.Fatal("Failed to parse embedded template:", err)
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

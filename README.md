@@ -27,10 +27,10 @@ Automatic SQLite backup system with multi-client support based on GUID.
 
 ```
 litestream-manager/
-├── bin/                 # Compiled binaries
+├── bin/                 # Compiled binaries (standalone)
 ├── src/
 │   ├── main.go          # Main application code
-│   └── template.html    # Dashboard template
+│   └── template.html    # Dashboard template (embedded in binary)
 ├── data/                # Database files directory
 ├── go.mod              # Go module definition
 ├── go.sum              # Go dependencies
@@ -49,6 +49,8 @@ GOOS=windows GOARCH=amd64 go build -o bin/litestream-manager.exe src/main.go
 # macOS
 go build -o bin/litestream-manager src/main.go
 ```
+
+**📦 Standalone Binary:** Template HTML embedded - no external files needed!
 
 ## 🚀 Quick Start
 
