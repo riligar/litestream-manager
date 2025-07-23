@@ -30,7 +30,7 @@ export AWS_ACCESS_KEY_ID=xxxxxxxxxxxxxxxxxxxx
 export AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-### Modo Recomendado: Monitoramento de Diretório
+### Monitoramento de Diretório
 ```bash
 # Criar estrutura local
 mkdir -p data/clients
