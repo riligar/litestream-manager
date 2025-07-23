@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -21,6 +22,31 @@ import (
 	"github.com/fsnotify/fsnotify"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// Logger personalizado que filtra mensagens técnicas do Litestream
+type filteredWriter struct {
+	writer io.Writer
+}
+
+func (fw *filteredWriter) Write(p []byte) (n int, err error) {
+	msg := string(p)
+	
+	// Filtra mensagens técnicas do Litestream (mantém apenas logs amigáveis)
+	if strings.Contains(msg, "wal header mismatch") ||
+		strings.Contains(msg, "cannot determine last wal position") ||
+		strings.Contains(msg, "sync error") ||
+		strings.Contains(msg, "init:") ||
+		strings.Contains(msg, "restor") ||
+		strings.Contains(msg, "snapshot") ||
+		strings.Contains(msg, "generation") ||
+		strings.Contains(msg, ".db-litestream/") ||
+		strings.Contains(msg, "generations/") ||
+		strings.Contains(msg, "/wal/") {
+		return len(p), nil // Descarta mensagem técnica
+	}
+	
+	return fw.writer.Write(p)
+}
 
 // addr is the bind address for the web server.
 // addr will be set based on the port flag
@@ -70,6 +96,9 @@ func main() {
 }
 
 func run() error {
+	// Configura logger para filtrar mensagens técnicas do Litestream
+	log.SetOutput(&filteredWriter{writer: os.Stdout})
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()
 
