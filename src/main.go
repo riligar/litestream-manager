@@ -535,7 +535,7 @@ func restore(ctx context.Context, replica *litestream.Replica) (err error) {
 // startStatusServer inicia servidor de status usando template HTML
 func startStatusServer(dm *DatabaseManager, addr string) {
 	// Parse template
-	tmpl, err := template.ParseFiles("template.html")
+	tmpl, err := template.ParseFiles("src/template.html")
 	if err != nil {
 		log.Fatal("Failed to parse template:", err)
 	}

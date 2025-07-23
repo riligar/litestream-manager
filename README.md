@@ -28,20 +28,20 @@ Automatic SQLite backup system with multi-client support based on GUID.
 
 ```bash
 # Linux
-GOOS=linux GOARCH=amd64 go build -o litestream-manager-linux main.go
+GOOS=linux GOARCH=amd64 go build -o litestream-manager-linux src/main.go
 
 # Windows  
-GOOS=windows GOARCH=amd64 go build -o litestream-manager.exe main.go
+GOOS=windows GOARCH=amd64 go build -o litestream-manager.exe src/main.go
 
 # macOS
-go build -o litestream-manager main.go
+go build -o litestream-manager src/main.go
 ```
 
 ## 🚀 Quick Start
 
 ```bash
 # Build
-go build -o litestream-manager main.go
+go build -o litestream-manager src/main.go
 
 # Configure AWS
 export AWS_ACCESS_KEY_ID=your-access-key
