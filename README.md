@@ -41,6 +41,9 @@ litestream-library-example -dsn /path/to/db -bucket YOURBUCKETNAME
   # Directory watching mode (recommended)
   mkdir -p data/clients
   go run main.go -watch-dir "data/clients" -bucket applications-backups-prod
+  
+  # Custom port (useful for avoiding conflicts or running multiple instances)
+  go run main.go -watch-dir "data/clients" -bucket applications-backups-prod -port 9090
   ```
 
 On your first run, it will see that there is no snapshot available so the

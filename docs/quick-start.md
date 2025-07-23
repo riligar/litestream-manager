@@ -20,6 +20,7 @@ go run main.go -watch-dir "data/clients" -bucket "your-s3-bucket"
 
 ### **3. View Dashboard**
 Open your browser and visit: **http://localhost:8080**
+(or your custom port if you specified one with `-port`)
 
 ### **4. Test Dynamic Client Creation**
 ```bash
@@ -55,6 +56,23 @@ go run main.go -watch-dir "nonexistent" -bucket "backups"
 # ✅ Now it works!
 ```
 
+### **❌ Port Already in Use**
+```bash
+# Problem: Port 8080 is busy
+go run main.go -watch-dir "data/clients" -bucket "backups"
+# ❌ listen tcp :8080: bind: address already in use
+
+# Solution 1: Use a different port
+go run main.go -watch-dir "data/clients" -bucket "backups" -port 9090
+# ✅ Now runs on http://localhost:9090
+
+# Solution 2: Kill the process using port 8080
+lsof -i :8080  # Find the PID
+kill <PID>     # Kill the process
+go run main.go -watch-dir "data/clients" -bucket "backups"
+# ✅ Now works on default port 8080
+```
+
 ## 📋 Best Practices
 
 ### **Directory Structure**
@@ -73,10 +91,16 @@ your-project/
 # Create environment-specific directories
 mkdir -p data/{production,staging,development}
 
-# Run for production
+# Run for production (default port 8080)
 go run main.go -watch-dir "data/production" -bucket "prod-backups"
 
-# Run for multiple environments
+# Run for staging (custom port to avoid conflicts)
+go run main.go -watch-dir "data/staging" -bucket "staging-backups" -port 8081
+
+# Run for development (another custom port)
+go run main.go -watch-dir "data/development" -bucket "dev-backups" -port 8082
+
+# Run for multiple environments (single instance)
 go run main.go -watch-dir "data/production,data/staging" -bucket "multi-env-backups"
 ```
 
@@ -89,6 +113,35 @@ go run main.go -watch-dir "data/production,data/staging" -bucket "multi-env-back
 client-123.db
 user_data.db
 random-name.db
+```
+
+## 📋 Command Line Options
+
+```bash
+# View all available options
+go run main.go -h
+
+# Available flags:
+-watch-dir string    # directory to watch for GUID.db files (comma-separated for multiple)
+-bucket string       # s3 replica bucket
+-port string         # port for the web server (default: 8080)
+-dsn string          # datasource name (legacy mode)
+-db-name string      # database name for organizing in S3 (optional)
+```
+
+### **Common Usage Patterns**
+```bash
+# Basic directory monitoring
+go run main.go -watch-dir "data/clients" -bucket "backups"
+
+# Multiple directories with custom port  
+go run main.go -watch-dir "data/prod,data/staging" -bucket "backups" -port 9090
+
+# Legacy single database mode
+go run main.go -dsn "data/single.db" -bucket "backups"
+
+# Custom database name for organization
+go run main.go -dsn "data/app.db" -bucket "backups" -db-name "main-app"
 ```
 
 ## 🎯 Next Steps

@@ -23,7 +23,7 @@ import (
 )
 
 // addr is the bind address for the web server.
-const addr = ":8080"
+// addr will be set based on the port flag
 
 // DatabaseManager gerencia múltiplas instâncias do Litestream
 type DatabaseManager struct {
@@ -59,12 +59,16 @@ func run() error {
 	// Parse command line flags.
 	watchDir := flag.String("watch-dir", "", "directory to watch for GUID.db files (comma-separated for multiple)")
 	bucket := flag.String("bucket", "", "s3 replica bucket")
+	port := flag.String("port", "8080", "port for the web server (default: 8080)")
 	
 	// Legacy support for single database
 	dsn := flag.String("dsn", "", "datasource name (legacy mode)")
 	dbName := flag.String("db-name", "", "database name for organizing in S3 (optional)")
 	
 	flag.Parse()
+	
+	// Set address based on port flag
+	addr := ":" + *port
 
 	// Validate required parameters
 	if *bucket == "" {
@@ -74,9 +78,9 @@ func run() error {
 
 	// Choose mode: directory watching (new) or single database (legacy)
 	if *watchDir != "" {
-		return runDirectoryMode(ctx, *watchDir, *bucket)
+		return runDirectoryMode(ctx, *watchDir, *bucket, addr)
 	} else if *dsn != "" {
-		return runLegacyMode(ctx, *dsn, *bucket, *dbName)
+		return runLegacyMode(ctx, *dsn, *bucket, *dbName, addr)
 	} else {
 		flag.Usage()
 		return fmt.Errorf("required: -watch-dir PATH or -dsn PATH")
@@ -84,7 +88,7 @@ func run() error {
 }
 
 // runDirectoryMode runs the new multi-database directory watching mode
-func runDirectoryMode(ctx context.Context, watchDirStr, bucket string) error {
+func runDirectoryMode(ctx context.Context, watchDirStr, bucket, addr string) error {
 	watchDirs := strings.Split(watchDirStr, ",")
 	
 	// Trim spaces
@@ -108,7 +112,7 @@ func runDirectoryMode(ctx context.Context, watchDirStr, bucket string) error {
 	}
 
 	// Start status web server
-	go startStatusServer(dm)
+	go startStatusServer(dm, addr)
 
 	// Wait for signal
 	<-ctx.Done()
@@ -117,7 +121,7 @@ func runDirectoryMode(ctx context.Context, watchDirStr, bucket string) error {
 }
 
 // runLegacyMode runs the original single database mode
-func runLegacyMode(ctx context.Context, dsn, bucket, dbName string) error {
+func runLegacyMode(ctx context.Context, dsn, bucket, dbName, addr string) error {
 	fmt.Println("🗄️  Litestream Single Database (Legacy Mode)")
 	fmt.Println("==========================================")
 	
@@ -566,7 +570,7 @@ func handleLegacyRequest(w http.ResponseWriter, r *http.Request, db *sql.DB, lsd
 }
 
 // startStatusServer inicia servidor de status para modo diretório
-func startStatusServer(dm *DatabaseManager) {
+func startStatusServer(dm *DatabaseManager, addr string) {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		dm.mutex.RLock()
 		defer dm.mutex.RUnlock()
