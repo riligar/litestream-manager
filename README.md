@@ -1,100 +1,77 @@
 # Litestream Manager
 
-Sistema de backup automático para SQLite com suporte a múltiplos clientes baseados em GUID.
+Automatic SQLite backup system with multi-client support based on GUID.
 
-## 🔄 Fluxo de Trabalho
+## 🔄 How It Works
 
-**Step by Step do Servidor:**
+**Server Workflow:**
 
-1. **Inicialização**: Valida diretórios e inicia file watcher
-2. **Descoberta**: Escaneia arquivos `.db` existentes com GUID válido
-3. **Configuração**: Para cada banco detectado:
-   - Cria configuração Litestream única
-   - **Se S3 vazio**: Inicia backup inicial completo
-   - **Se S3 existe**: Sincroniza com backup existente (continua de onde parou)
-   - Inicia processo de backup contínuo (WAL streaming)
-   - Registra cliente no sistema (O(1) lookup)
-4. **Monitoramento**: File watcher detecta mudanças em tempo real:
-   - **CREATE**: Novo `.db` → adiciona cliente automaticamente
-   - **DELETE**: Remove `.db` → para backup e limpa registros
-   - **MODIFY**: Atualiza estatísticas de tamanho
-5. **Dashboard**: Interface web atualiza dados em tempo real
-6. **Backup S3**: Litestream replica continuamente para `s3://bucket/databases/{clientID}/`
+1. **Initialization**: Validates directories and starts file watcher
+2. **Discovery**: Scans existing `.db` files with valid GUID
+3. **Configuration**: For each detected database:
+   - Creates unique Litestream configuration
+   - **If S3 empty**: Starts full initial backup
+   - **If S3 exists**: Syncs with existing backup (continues from where it left off)
+   - Starts continuous backup (WAL streaming)
+   - Registers client in system (O(1) lookup)
+4. **Monitoring**: File watcher detects real-time changes:
+   - **CREATE**: New `.db` → auto-adds client
+   - **DELETE**: Remove `.db` → stops backup and cleans records
+   - **MODIFY**: Updates size statistics
+5. **Dashboard**: Real-time web interface updates
+6. **S3 Backup**: Litestream continuously replicates to `s3://bucket/databases/{clientID}/`
 
-**Fluxo Otimizado**: Detecção sub-milissegundo → Backup automático → Dashboard em tempo real
+**Optimized Flow**: Sub-millisecond detection → Automatic backup → Real-time dashboard
 
-## 🚀 Instalação
+## 🚀 Quick Start
 
 ```bash
-# Compilar
+# Build
 go build -o litestream-manager main.go
 
-# Para outros sistemas:
-# Windows: GOOS=windows GOARCH=amd64 go build -o litestream-manager.exe main.go
-# Linux:   GOOS=linux GOARCH=amd64 go build -o litestream-manager-linux main.go
-```
+# Configure AWS
+export AWS_ACCESS_KEY_ID=your-access-key
+export AWS_SECRET_ACCESS_KEY=your-secret-key
 
-## ⚙️ Uso
-
-### Configuração AWS
-```bash
-export AWS_ACCESS_KEY_ID=xxxxxxxxxxxxxxxxxxxx
-export AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-### Comando Básico
-```bash
-# Criar diretório
+# Create directory and start
 mkdir -p data/clients
-
-# Iniciar monitoramento
-./litestream-manager -watch-dir "data/clients" -bucket "seu-bucket-s3"
+./litestream-manager -watch-dir "data/clients" -bucket "your-s3-bucket"
 
 # Dashboard: http://localhost:8080
 ```
 
-## 📋 Parâmetros
+## ⚙️ Usage
 
-| Flag | Descrição | Padrão |
-|------|-----------|--------|
-| `-watch-dir` | Diretórios para monitorar (separados por vírgula) | **obrigatório** |
-| `-bucket` | Bucket S3 para backup | **obrigatório** |
-| `-port` | Porta do servidor web | `8080` |
+### Parameters
 
-## 🎯 Como Funciona
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-watch-dir` | Directories to watch (comma-separated) | **required** |
+| `-bucket` | S3 bucket for backups | **required** |
+| `-port` | Web server port | `8080` |
 
-### 1. Criar Cliente
+### Client Management
+
 ```bash
-# GUID obrigatório: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# Add client (GUID required: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
 touch data/clients/12345678-1234-5678-9abc-123456789012.db
 
-# Sistema detecta automaticamente e cria:
-# s3://bucket/databases/12345678-1234-5678-9abc-123456789012/
-```
-
-### 2. Remover Cliente
-```bash
+# Remove client
 rm data/clients/12345678-1234-5678-9abc-123456789012.db
-# Sistema remove automaticamente do monitoramento
-```
 
-### 3. Múltiplos Ambientes
-```bash
-# Produção
+# Multiple environments
 ./litestream-manager -watch-dir "data/prod" -bucket "prod-backups"
-
-# Staging  
 ./litestream-manager -watch-dir "data/staging" -bucket "staging-backups" -port 8081
 ```
 
-## 📊 Estrutura
+## 📊 Structure
 
 ### Local
 ```
 data/clients/
-├── 12345678-1234-5678-9abc-123456789012.db  # Cliente A
-├── 98765432-4321-8765-cba9-876543210987.db  # Cliente B
-└── abcdef01-2345-6789-abcd-ef0123456789.db  # Cliente C
+├── 12345678-1234-5678-9abc-123456789012.db
+├── 98765432-4321-8765-cba9-876543210987.db
+└── abcdef01-2345-6789-abcd-ef0123456789.db
 ```
 
 ### S3
@@ -105,40 +82,33 @@ s3://bucket/databases/
 └── abcdef01-2345-6789-abcd-ef0123456789/
 ```
 
-## 🔧 Restauração
+## 🔧 Restore
 
 ```bash
 litestream restore \
-  -o "restore/cliente.db" \
+  -o "restore/client.db" \
   s3://bucket/databases/12345678-1234-5678-9abc-123456789012
-```
-
-## 🎯 Exemplo Completo
-
-```bash
-# 1. Configurar AWS
-export AWS_ACCESS_KEY_ID=your-key
-export AWS_SECRET_ACCESS_KEY=your-secret
-
-# 2. Criar estrutura
-mkdir -p data/clients
-
-# 3. Iniciar sistema  
-./litestream-manager -watch-dir "data/clients" -bucket "company-backups"
-
-# 4. Adicionar clientes
-touch data/clients/12345678-1234-5678-9abc-123456789012.db
-touch data/clients/98765432-4321-8765-cba9-876543210987.db
-
-# 5. Monitorar: http://localhost:8080
 ```
 
 ## ⚡ Performance
 
-- **Clientes**: ~1000 por instância (1:1 cliente:banco)
-- **Lookup**: O(1) para todas as operações  
-- **Memória**: 30-150MB otimizada
-- **File Watcher**: fsnotify nativo (sub-milissegundo)
+- **Clients**: ~1000 per instance (1:1 client:database)
+- **Lookup**: O(1) for all operations
+- **Memory**: 30-150MB optimized
+- **File Watcher**: Native fsnotify (sub-millisecond)
 
-**Sistema otimizado para produção SaaS com backup automático!** 🚀
+## 🛠️ Build for Production
+
+```bash
+# Linux
+GOOS=linux GOARCH=amd64 go build -o litestream-manager-linux main.go
+
+# Windows  
+GOOS=windows GOARCH=amd64 go build -o litestream-manager.exe main.go
+
+# macOS
+go build -o litestream-manager main.go
+```
+
+**Production-ready SaaS system with automatic backup!** 🚀
 
