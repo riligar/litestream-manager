@@ -23,25 +23,38 @@ Automatic SQLite backup system with multi-client support based on GUID.
 
 **Optimized Flow**: Sub-millisecond detection → Automatic backup → Real-time dashboard
 
+## 📁 Project Structure
+
+```
+litestream-manager/
+├── bin/                 # Compiled binaries
+├── src/
+│   ├── main.go          # Main application code
+│   └── template.html    # Dashboard template
+├── data/                # Database files directory
+├── go.mod              # Go module definition
+├── go.sum              # Go dependencies
+└── README.md           # This file
+```
 
 ## 🛠️ Build for Production
 
 ```bash
 # Linux
-GOOS=linux GOARCH=amd64 go build -o litestream-manager-linux src/main.go
+GOOS=linux GOARCH=amd64 go build -o bin/litestream-manager-linux src/main.go
 
 # Windows  
-GOOS=windows GOARCH=amd64 go build -o litestream-manager.exe src/main.go
+GOOS=windows GOARCH=amd64 go build -o bin/litestream-manager.exe src/main.go
 
 # macOS
-go build -o litestream-manager src/main.go
+go build -o bin/litestream-manager src/main.go
 ```
 
 ## 🚀 Quick Start
 
 ```bash
 # Build
-go build -o litestream-manager src/main.go
+go build -o bin/litestream-manager src/main.go
 
 # Configure AWS
 export AWS_ACCESS_KEY_ID=your-access-key
@@ -49,7 +62,7 @@ export AWS_SECRET_ACCESS_KEY=your-secret-key
 
 # Create directory and start
 mkdir -p data/clients
-./litestream-manager -watch-dir "data/clients" -bucket "your-s3-bucket"
+./bin/litestream-manager -watch-dir "data/clients" -bucket "your-s3-bucket"
 
 # Dashboard: http://localhost:8080
 ```
@@ -74,8 +87,8 @@ touch data/clients/12345678-1234-5678-9abc-123456789012.db
 rm data/clients/12345678-1234-5678-9abc-123456789012.db
 
 # Multiple environments
-./litestream-manager -watch-dir "data/prod" -bucket "prod-backups"
-./litestream-manager -watch-dir "data/staging" -bucket "staging-backups" -port 8081
+./bin/litestream-manager -watch-dir "data/prod" -bucket "prod-backups"
+./bin/litestream-manager -watch-dir "data/staging" -bucket "staging-backups" -port 8081
 ```
 
 ## 📊 Structure
