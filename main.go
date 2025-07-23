@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"os"
@@ -42,6 +43,23 @@ type ClientConfig struct {
 	ClientID     string    `json:"clientId"`
 	DatabasePath string    `json:"databasePath"`
 	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// DashboardData dados para o template HTML
+type DashboardData struct {
+	Bucket        string       `json:"bucket"`
+	WatchDirCount int          `json:"watchDirCount"`
+	ClientCount   int          `json:"clientCount"`
+	Clients       []ClientData `json:"clients"`
+}
+
+// ClientData dados de cada cliente para o template
+type ClientData struct {
+	ClientID     string `json:"clientId"`
+	DatabasePath string `json:"databasePath"`
+	StatusClass  string `json:"statusClass"`
+	StatusText   string `json:"statusText"`
+	CreatedAt    string `json:"createdAt"`
 }
 
 func main() {
@@ -446,96 +464,50 @@ func restore(ctx context.Context, replica *litestream.Replica) (err error) {
 
 
 
-// startStatusServer inicia servidor de status para modo diretório
+// startStatusServer inicia servidor de status usando template HTML
 func startStatusServer(dm *DatabaseManager, addr string) {
+	// Parse template
+	tmpl, err := template.ParseFiles("template.html")
+	if err != nil {
+		log.Fatal("Failed to parse template:", err)
+	}
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		dm.mutex.RLock()
 		defer dm.mutex.RUnlock()
 		
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		
-		fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-    <title>Litestream Multi-Client Manager</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 40px; }
-        .header { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        .client { background: #fff; border: 1px solid #dee2e6; border-radius: 8px; padding: 15px; margin: 10px 0; }
-        .client-id { font-family: 'Monaco', 'Consolas', monospace; background: #e9ecef; padding: 4px 8px; border-radius: 4px; }
-        .path { color: #6c757d; font-size: 0.9em; }
-        .s3-path { color: #28a745; font-size: 0.9em; }
-        .stats { display: flex; gap: 20px; margin: 20px 0; }
-        .stat { background: #e3f2fd; padding: 15px; border-radius: 8px; text-align: center; }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>🏢 Litestream Multi-Client Manager</h1>
-        <p>📦 S3 Bucket: <strong>%s</strong></p>
-        <p>👀 Watching: <strong>%v</strong></p>
-    </div>
-    
-    <div class="stats">
-        <div class="stat">
-            <h3>%d</h3>
-            <p>Active Clients</p>
-        </div>
-        <div class="stat">
-            <h3>%d</h3>
-            <p>Watch Directories</p>
-        </div>
-        <div class="stat">
-            <h3>%s</h3>
-            <p>Uptime</p>
-        </div>
-    </div>
-    
-    <h2>📊 Active Clients</h2>`, 
-			dm.bucket, dm.watchDirs, len(dm.clients), len(dm.watchDirs), time.Since(time.Now().Add(-time.Hour)).Truncate(time.Second))
-		
-		if len(dm.clients) == 0 {
-			fmt.Fprintf(w, `<p style="text-align: center; color: #6c757d; margin: 40px;">
-				No clients found. Create a GUID.db file in the watched directories to get started.
-			</p>`)
-		} else {
-			// Iteração otimizada usando clientID como chave primária
-			for clientID, config := range dm.clients {
-				status := "🟢 Active"
-				if _, exists := dm.databases[clientID]; !exists {
-					status = "🔴 Inactive" 
-				}
-				
-				fmt.Fprintf(w, `
-				<div class="client">
-					<div style="display: flex; justify-content: space-between; align-items: center;">
-						<span class="client-id">%s</span>
-						<span>%s</span>
-					</div>
-					<div class="path">📁 %s</div>
-					<div class="s3-path">☁️  s3://%s/databases/%s/</div>
-					<div style="color: #6c757d; font-size: 0.8em; margin-top: 8px;">
-						⏰ Created: %s
-					</div>
-				</div>`,
-					clientID, status, config.DatabasePath, 
-					dm.bucket, clientID,
-					config.CreatedAt.Format("2006-01-02 15:04:05"))
+		// Preparar dados para o template
+		var clients []ClientData
+		for clientID, config := range dm.clients {
+			statusClass := "status-active"
+			statusText := "ACTIVE"
+			if _, exists := dm.databases[clientID]; !exists {
+				statusClass = "status-inactive"
+				statusText = "INACTIVE"
 			}
+			
+			clients = append(clients, ClientData{
+				ClientID:     clientID,
+				DatabasePath: config.DatabasePath,
+				StatusClass:  statusClass,
+				StatusText:   statusText,
+				CreatedAt:    config.CreatedAt.Format("2006-01-02 15:04:05"),
+			})
 		}
 		
-		fmt.Fprintf(w, `
-		<div style="margin-top: 40px; padding: 20px; background: #f8f9fa; border-radius: 8px; color: #6c757d; font-size: 0.9em;">
-			<h3>💡 Usage Tips</h3>
-			<ul>
-				<li>Create a new client: <code>touch /path/to/12345678-1234-5678-9abc-123456789012.db</code></li>
-				<li>Remove a client: Delete the .db file from the filesystem</li>
-				<li>GUID format: <code>xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</code></li>
-				<li>Refresh this page to see live updates</li>
-			</ul>
-		</div>
-		</body>
-		</html>`)
+		data := DashboardData{
+			Bucket:        dm.bucket,
+			WatchDirCount: len(dm.watchDirs),
+			ClientCount:   len(dm.clients),
+			Clients:       clients,
+		}
+		
+		// Renderizar template
+		if err := tmpl.Execute(w, data); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	})
 	
 	http.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
