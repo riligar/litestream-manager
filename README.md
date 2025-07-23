@@ -23,6 +23,20 @@ Automatic SQLite backup system with multi-client support based on GUID.
 
 **Optimized Flow**: Sub-millisecond detection → Automatic backup → Real-time dashboard
 
+
+## 🛠️ Build for Production
+
+```bash
+# Linux
+GOOS=linux GOARCH=amd64 go build -o litestream-manager-linux main.go
+
+# Windows  
+GOOS=windows GOARCH=amd64 go build -o litestream-manager.exe main.go
+
+# macOS
+go build -o litestream-manager main.go
+```
+
 ## 🚀 Quick Start
 
 ```bash
@@ -96,19 +110,6 @@ litestream restore \
 - **Lookup**: O(1) for all operations
 - **Memory**: 30-150MB optimized
 - **File Watcher**: Native fsnotify (sub-millisecond)
-
-## 🛠️ Build for Production
-
-```bash
-# Linux
-GOOS=linux GOARCH=amd64 go build -o litestream-manager-linux main.go
-
-# Windows  
-GOOS=windows GOARCH=amd64 go build -o litestream-manager.exe main.go
-
-# macOS
-go build -o litestream-manager main.go
-```
 
 **Production-ready SaaS system with automatic backup!** 🚀
 
