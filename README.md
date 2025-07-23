@@ -64,7 +64,7 @@ export AWS_SECRET_ACCESS_KEY=your-secret-key
 
 # Create directory and start
 mkdir -p data/clients
-./bin/litestream-manager -watch-dir "data/clients" -bucket "your-s3-bucket"
+./bin/litestream-manager -watch-dir "data/clients" -bucket "applications-backups-prod"
 
 # Dashboard: http://localhost:8080
 ```
