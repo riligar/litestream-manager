@@ -137,6 +137,16 @@ func getClientGenerations(bucket, clientID string) ([]GenerationData, error) {
 	s3Path := fmt.Sprintf("s3://%s/databases/%s", bucket, clientID)
 	
 	cmd := exec.Command("litestream", "generations", s3Path)
+	
+	// Adicionar GOPATH ao PATH para encontrar litestream
+	if goPath := os.Getenv("GOPATH"); goPath != "" {
+		currentPath := os.Getenv("PATH")
+		cmd.Env = append(os.Environ(), fmt.Sprintf("PATH=%s:%s/bin", currentPath, goPath))
+	} else if homeDir := os.Getenv("HOME"); homeDir != "" {
+		currentPath := os.Getenv("PATH")
+		cmd.Env = append(os.Environ(), fmt.Sprintf("PATH=%s:%s/go/bin", currentPath, homeDir))
+	}
+	
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get generations: %w", err)
@@ -150,6 +160,16 @@ func getClientSnapshots(bucket, clientID, generationID string) ([]SnapshotData, 
 	s3Path := fmt.Sprintf("s3://%s/databases/%s", bucket, clientID)
 	
 	cmd := exec.Command("litestream", "snapshots", s3Path, "-generation", generationID)
+	
+	// Adicionar GOPATH ao PATH para encontrar litestream
+	if goPath := os.Getenv("GOPATH"); goPath != "" {
+		currentPath := os.Getenv("PATH")
+		cmd.Env = append(os.Environ(), fmt.Sprintf("PATH=%s:%s/bin", currentPath, goPath))
+	} else if homeDir := os.Getenv("HOME"); homeDir != "" {
+		currentPath := os.Getenv("PATH")
+		cmd.Env = append(os.Environ(), fmt.Sprintf("PATH=%s:%s/go/bin", currentPath, homeDir))
+	}
+	
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get snapshots: %w", err)
