@@ -189,7 +189,6 @@
 
         .detail-icon {
             color: #656d76;
-            width: 12px;
             font-size: 12px;
         }
 
@@ -206,6 +205,145 @@
         .detail-text.timestamp {
             color: #656d76;
             font-size: 10px;
+        }
+
+        .backup-toggle {
+            border: none;
+            background: none;
+            padding: 0;
+            cursor: pointer;
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            font-family: inherit;
+            font-size: 11px;
+            color: #0969da;
+            transition: color 0.2s ease;
+        }
+
+        .backup-toggle:hover {
+            color: #0550ae;
+        }
+
+        .toggle-arrow {
+            font-size: 8px;
+            transition: transform 0.2s ease;
+        }
+
+        .toggle-arrow.expanded {
+            transform: rotate(90deg);
+        }
+
+        .backup-section {
+            margin-top: 8px;
+            border-top: 1px solid #d0d7de;
+            padding-top: 8px;
+        }
+
+        .backup-content {
+            font-size: 11px;
+        }
+
+        .backup-loading {
+            color: #656d76;
+            font-style: italic;
+            text-align: center;
+            padding: 8px;
+        }
+
+        .backup-error {
+            color: #da3633;
+            text-align: center;
+            padding: 8px;
+        }
+
+        .generation-item {
+            border: 1px solid #d0d7de;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            overflow: hidden;
+        }
+
+        .generation-header {
+            background: #f6f8fa;
+            padding: 8px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background-color 0.2s ease;
+        }
+
+        .generation-header:hover {
+            background: #eaeef2;
+        }
+
+        .generation-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .generation-id {
+            font-weight: 500;
+            color: #24292f;
+        }
+
+        .generation-dates {
+            color: #656d76;
+            font-size: 10px;
+        }
+
+        .generation-arrow {
+            font-size: 8px;
+            transition: transform 0.2s ease;
+        }
+
+        .generation-arrow.expanded {
+            transform: rotate(90deg);
+        }
+
+        .snapshots-list {
+            padding: 8px;
+            background: #ffffff;
+            border-top: 1px solid #d0d7de;
+        }
+
+        .snapshot-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 8px;
+            background: #f6f8fa;
+            border-radius: 3px;
+            margin-bottom: 4px;
+        }
+
+        .snapshot-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .snapshot-info {
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+
+        .snapshot-id {
+            font-weight: 500;
+            color: #24292f;
+            font-size: 10px;
+        }
+
+        .snapshot-date {
+            color: #656d76;
+            font-size: 9px;
+        }
+
+        .snapshot-size {
+            color: #0969da;
+            font-size: 10px;
+            font-weight: 500;
         }
 
         .empty-state {
@@ -362,6 +500,18 @@
                             <span class="detail-icon">⏰</span>
                             <span class="detail-text timestamp">Created: {{.CreatedAt}}</span>
                         </div>
+                        <div class="detail-row">
+                            <button class="backup-toggle" onclick="toggleBackups('{{.ClientID}}')">
+                                <span class="detail-icon">💾</span>
+                                <span class="backup-text">View Backups</span>
+                                <span class="toggle-arrow">▶</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="backup-section" id="backup-{{.ClientID}}" style="display: none;">
+                        <div class="backup-content">
+                            <div class="backup-loading">Loading backup information...</div>
+                        </div>
                     </div>
                 </div>
                 {{end}}
@@ -393,6 +543,139 @@
         </div>
 
     </div>
+
+    <script>
+        // Cache para armazenar dados de backup já carregados
+        const backupCache = new Map();
+
+        // Função para alternar visualização de backups
+        async function toggleBackups(clientId) {
+            const backupSection = document.getElementById(`backup-${clientId}`);
+            const arrow = document.querySelector(`button[onclick="toggleBackups('${clientId}')"] .toggle-arrow`);
+            const buttonText = document.querySelector(`button[onclick="toggleBackups('${clientId}')"] .backup-text`);
+
+            if (backupSection.style.display === 'none') {
+                // Expandir
+                backupSection.style.display = 'block';
+                arrow.classList.add('expanded');
+                buttonText.textContent = 'Hide Backups';
+
+                // Carregar dados se ainda não foram carregados
+                if (!backupCache.has(clientId)) {
+                    await loadBackupData(clientId);
+                }
+            } else {
+                // Colapsar
+                backupSection.style.display = 'none';
+                arrow.classList.remove('expanded');
+                buttonText.textContent = 'View Backups';
+            }
+        }
+
+        // Função para carregar dados de backup
+        async function loadBackupData(clientId) {
+            const backupContent = document.querySelector(`#backup-${clientId} .backup-content`);
+
+            try {
+                const response = await fetch(`/api/client/${clientId}/generations`);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                backupCache.set(clientId, data);
+
+                renderBackupData(clientId, data);
+
+            } catch (error) {
+                console.error('Failed to load backup data:', error);
+                backupContent.innerHTML = `
+                    <div class="backup-error">
+                        Failed to load backup information: ${error.message}
+                    </div>
+                `;
+            }
+        }
+
+        // Função para renderizar dados de backup
+        function renderBackupData(clientId, data) {
+            const backupContent = document.querySelector(`#backup-${clientId} .backup-content`);
+
+            if (!data.generations || data.generations.length === 0) {
+                backupContent.innerHTML = `
+                    <div class="backup-error">
+                        No backup generations found for this client
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+            data.generations.forEach((generation, index) => {
+                const generationId = `gen-${clientId}-${index}`;
+                html += `
+                    <div class="generation-item">
+                        <div class="generation-header" onclick="toggleGeneration('${generationId}')">
+                            <div class="generation-info">
+                                <div class="generation-id">Generation: ${generation.id}</div>
+                                <div class="generation-dates">
+                                    Created: ${formatDate(generation.created)} | Updated: ${formatDate(generation.updated)}
+                                </div>
+                            </div>
+                            <span class="generation-arrow" id="arrow-${generationId}">▶</span>
+                        </div>
+                        <div class="snapshots-list" id="snapshots-${generationId}" style="display: none;">
+                            ${renderSnapshots(generation.snapshots)}
+                        </div>
+                    </div>
+                `;
+            });
+
+            backupContent.innerHTML = html;
+        }
+
+        // Função para renderizar snapshots
+        function renderSnapshots(snapshots) {
+            if (!snapshots || snapshots.length === 0) {
+                return '<div class="backup-error">No snapshots found</div>';
+            }
+
+            return snapshots.map(snapshot => `
+                <div class="snapshot-item">
+                    <div class="snapshot-info">
+                        <div class="snapshot-id">${snapshot.id}</div>
+                        <div class="snapshot-date">${formatDate(snapshot.created)}</div>
+                    </div>
+                    <div class="snapshot-size">${snapshot.size}</div>
+                </div>
+            `).join('');
+        }
+
+        // Função para alternar visualização de geração
+        function toggleGeneration(generationId) {
+            const snapshotsList = document.getElementById(`snapshots-${generationId}`);
+            const arrow = document.getElementById(`arrow-${generationId}`);
+
+            if (snapshotsList.style.display === 'none') {
+                snapshotsList.style.display = 'block';
+                arrow.classList.add('expanded');
+            } else {
+                snapshotsList.style.display = 'none';
+                arrow.classList.remove('expanded');
+            }
+        }
+
+        // Função para formatar data
+        function formatDate(dateString) {
+            if (!dateString) return 'N/A';
+            try {
+                return new Date(dateString).toLocaleString();
+            } catch {
+                return dateString;
+            }
+        }
+    </script>
 </body>
 
 </html>

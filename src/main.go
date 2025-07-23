@@ -11,8 +11,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -112,6 +114,106 @@ type ClientData struct {
 	StatusClass  string `json:"statusClass"`
 	StatusText   string `json:"statusText"`
 	CreatedAt    string `json:"createdAt"`
+	Generations  []GenerationData `json:"generations,omitempty"`
+}
+
+// GenerationData informações de uma geração de backup
+type GenerationData struct {
+	ID       string        `json:"id"`
+	Created  string        `json:"created"`
+	Updated  string        `json:"updated"`
+	Snapshots []SnapshotData `json:"snapshots,omitempty"`
+}
+
+// SnapshotData informações de um snapshot
+type SnapshotData struct {
+	ID      string `json:"id"`
+	Created string `json:"created"`
+	Size    string `json:"size"`
+}
+
+// getClientGenerations obtém gerações disponíveis para um cliente
+func getClientGenerations(bucket, clientID string) ([]GenerationData, error) {
+	s3Path := fmt.Sprintf("s3://%s/databases/%s", bucket, clientID)
+	
+	cmd := exec.Command("litestream", "generations", s3Path)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get generations: %w", err)
+	}
+	
+	return parseGenerations(string(output))
+}
+
+// getClientSnapshots obtém snapshots de uma geração específica
+func getClientSnapshots(bucket, clientID, generationID string) ([]SnapshotData, error) {
+	s3Path := fmt.Sprintf("s3://%s/databases/%s", bucket, clientID)
+	
+	cmd := exec.Command("litestream", "snapshots", s3Path, "-generation", generationID)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get snapshots: %w", err)
+	}
+	
+	return parseSnapshots(string(output))
+}
+
+// parseGenerations parseia output do comando litestream generations
+func parseGenerations(output string) ([]GenerationData, error) {
+	var generations []GenerationData
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	
+	// Skip header line
+	if len(lines) <= 1 {
+		return generations, nil
+	}
+	
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		
+		// Parse generation line: generation_id    created_at    updated_at
+		fields := regexp.MustCompile(`\s+`).Split(strings.TrimSpace(line), -1)
+		if len(fields) >= 3 {
+			generations = append(generations, GenerationData{
+				ID:      fields[0],
+				Created: fields[1],
+				Updated: fields[2],
+			})
+		}
+	}
+	
+	return generations, nil
+}
+
+// parseSnapshots parseia output do comando litestream snapshots
+func parseSnapshots(output string) ([]SnapshotData, error) {
+	var snapshots []SnapshotData
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	
+	// Skip header line
+	if len(lines) <= 1 {
+		return snapshots, nil
+	}
+	
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		
+		// Parse snapshot line: snapshot_id    created_at    size
+		fields := regexp.MustCompile(`\s+`).Split(strings.TrimSpace(line), -1)
+		if len(fields) >= 3 {
+			snapshots = append(snapshots, SnapshotData{
+				ID:      fields[0],
+				Created: fields[1],
+				Size:    fields[2],
+			})
+		}
+	}
+	
+	return snapshots, nil
 }
 
 func main() {
@@ -629,6 +731,64 @@ func startStatusServer(dm *DatabaseManager, addr string) {
 			"activeClients":   len(dm.databases),  // já usa clientID
 			"uptime":          formatUptime(),
 			"clients":         clients,
+		}
+		
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+	})
+	
+	// Endpoint para obter gerações e snapshots de um cliente específico
+	http.HandleFunc("/api/client/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		
+		// Extrair clientID da URL: /api/client/{clientID}/generations
+		path := strings.TrimPrefix(r.URL.Path, "/api/client/")
+		parts := strings.Split(path, "/")
+		
+		if len(parts) < 2 || parts[1] != "generations" {
+			http.Error(w, "Invalid path. Use /api/client/{clientID}/generations", http.StatusBadRequest)
+			return
+		}
+		
+		clientID := parts[0]
+		
+		dm.mutex.RLock()
+		_, exists := dm.clients[clientID]
+		dm.mutex.RUnlock()
+		
+		if !exists {
+			http.Error(w, "Client not found", http.StatusNotFound)
+			return
+		}
+		
+		w.Header().Set("Content-Type", "application/json")
+		
+		// Obter gerações
+		generations, err := getClientGenerations(dm.bucket, clientID)
+		if err != nil {
+			log.Printf("⚠️  Failed to get generations for client %s: %v", clientID, err)
+			// Retorna array vazio em caso de erro para não quebrar a UI
+			generations = []GenerationData{}
+		}
+		
+		// Obter snapshots para cada geração
+		for i := range generations {
+			snapshots, err := getClientSnapshots(dm.bucket, clientID, generations[i].ID)
+			if err != nil {
+				log.Printf("⚠️  Failed to get snapshots for client %s generation %s: %v", 
+					clientID, generations[i].ID, err)
+				snapshots = []SnapshotData{}
+			}
+			generations[i].Snapshots = snapshots
+		}
+		
+		response := map[string]interface{}{
+			"clientId":    clientID,
+			"generations": generations,
 		}
 		
 		if err := json.NewEncoder(w).Encode(response); err != nil {
