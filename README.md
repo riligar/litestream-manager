@@ -113,13 +113,6 @@ litestream restore \
   s3://bucket/databases/12345678-1234-5678-9abc-123456789012
 ```
 
-## ⚡ Performance
-
-- **Clientes**: ~1000 por instância (1:1 cliente:banco)
-- **Lookup**: O(1) para todas as operações  
-- **Memória**: 30-150MB otimizada
-- **File Watcher**: fsnotify nativo (sub-milissegundo)
-
 ## 🎯 Exemplo Completo
 
 ```bash
@@ -139,6 +132,13 @@ touch data/clients/98765432-4321-8765-cba9-876543210987.db
 
 # 5. Monitorar: http://localhost:8080
 ```
+
+## ⚡ Performance
+
+- **Clientes**: ~1000 por instância (1:1 cliente:banco)
+- **Lookup**: O(1) para todas as operações  
+- **Memória**: 30-150MB otimizada
+- **File Watcher**: fsnotify nativo (sub-milissegundo)
 
 **Sistema otimizado para produção SaaS com backup automático!** 🚀
 
