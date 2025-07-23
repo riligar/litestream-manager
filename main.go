@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +36,7 @@ func run() error {
 	// Parse command line flags.
 	dsn := flag.String("dsn", "", "datasource name")
 	bucket := flag.String("bucket", "", "s3 replica bucket")
+	dbName := flag.String("db-name", "", "database name for organizing in S3 (optional - will extract from dsn if not provided)")
 	flag.Parse()
 	if *dsn == "" {
 		flag.Usage()
@@ -43,8 +46,11 @@ func run() error {
 		return fmt.Errorf("required: -bucket NAME")
 	}
 
+	// Extract database name for S3 organization
+	finalDbName := getDatabaseName(*dsn, *dbName)
+
 	// Create a Litestream DB and attached replica to manage background replication.
-	lsdb, err := replicate(ctx, *dsn, *bucket)
+	lsdb, err := replicate(ctx, *dsn, *bucket, finalDbName)
 	if err != nil {
 		return err
 	}
@@ -64,6 +70,7 @@ func run() error {
 
 	// Run web server.
 	fmt.Printf("listening on %s\n", addr)
+	fmt.Printf("database: %s -> s3://%s/databases/%s/\n", *dsn, *bucket, finalDbName)
 	go http.ListenAndServe(addr,
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Start a transaction.
@@ -125,10 +132,10 @@ func run() error {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			log.Printf("new transaction: pre=%s post=%s elapsed=%s", pos.String(), newPos.String(), time.Since(startTime))
+			log.Printf("new transaction: db=%s pre=%s post=%s elapsed=%s", finalDbName, pos.String(), newPos.String(), time.Since(startTime))
 
 			// Print total page views.
-			fmt.Fprintf(w, "This server has been visited %d times.\n", n)
+			fmt.Fprintf(w, "Database: %s\nThis server has been visited %d times.\n", finalDbName, n)
 		}),
 	)
 
@@ -139,13 +146,46 @@ func run() error {
 	return nil
 }
 
-func replicate(ctx context.Context, dsn, bucket string) (*litestream.DB, error) {
+// getDatabaseName extracts or determines the database name for S3 organization
+func getDatabaseName(dsn, providedName string) string {
+	if providedName != "" {
+		return sanitizeName(providedName)
+	}
+
+	// Extract from DSN path
+	base := filepath.Base(dsn)
+	name := strings.TrimSuffix(base, filepath.Ext(base))
+	
+	if name == "" || name == "." {
+		name = "default"
+	}
+
+	return sanitizeName(name)
+}
+
+// sanitizeName ensures the name is safe for use as S3 path
+func sanitizeName(name string) string {
+	// Replace invalid characters with underscores
+	safe := strings.ReplaceAll(name, " ", "_")
+	safe = strings.ReplaceAll(safe, "/", "_")
+	safe = strings.ReplaceAll(safe, "\\", "_")
+	safe = strings.ToLower(safe)
+	
+	if safe == "" {
+		safe = "default"
+	}
+	
+	return safe
+}
+
+func replicate(ctx context.Context, dsn, bucket, dbName string) (*litestream.DB, error) {
 	// Create Litestream DB reference for managing replication.
 	lsdb := litestream.NewDB(dsn)
 
 	// Build S3 replica and attach to database.
 	client := lss3.NewReplicaClient()
 	client.Bucket = bucket
+	client.Path = fmt.Sprintf("databases/%s", dbName) // Organized path structure
 
 	replica := litestream.NewReplica(lsdb, "s3")
 	replica.Client = client
