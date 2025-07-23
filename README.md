@@ -17,11 +17,6 @@ go build -o litestream-manager main.go
 # Linux:   GOOS=linux GOARCH=amd64 go build -o litestream-manager-linux main.go
 ```
 
-### Instalação Global (Opcional)
-```bash
-go install .
-```
-
 ## ⚙️ Uso Básico
 
 ### Configuração AWS
