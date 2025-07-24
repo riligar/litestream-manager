@@ -1,7 +1,7 @@
 #!/bin/bash
 # Script rápido para modificar bancos existentes e gerar atividade
 
-DATA_DIR="../data/clients"
+DATA_DIR="../data"
 
 echo "⚡ Modificação rápida dos bancos existentes..."
 echo "📁 Diretório: $DATA_DIR"
@@ -53,6 +53,26 @@ for db_file in "$DATA_DIR"/*.db; do
             SET description = description || ' [Updated at $TIMESTAMP]' 
             WHERE id IN (SELECT id FROM activity_log ORDER BY id DESC LIMIT 1);
             " 2>/dev/null || true
+            
+            # Executar SELECT e mostrar resultados na tela
+            echo "   📊 Últimas atividades registradas:"
+            sqlite3 "$db_file" "
+            SELECT 
+                id,
+                datetime(timestamp, 'localtime') as local_time,
+                activity_type,
+                description
+            FROM activity_log 
+            ORDER BY timestamp DESC 
+            LIMIT 3;
+            " 2>/dev/null | while IFS='|' read -r id timestamp activity_type description; do
+                if [ -n "$id" ]; then
+                    echo "      ID: $id | Time: $timestamp"
+                    echo "      Type: $activity_type"
+                    echo "      Description: $description"
+                    echo "      ---"
+                fi
+            done
             
             BANKS_MODIFIED=$((BANKS_MODIFIED + 1))
         else
