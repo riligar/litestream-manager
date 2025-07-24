@@ -502,8 +502,8 @@
                         </div>
                         <div class="detail-row">
                             <button class="backup-toggle" onclick="toggleBackups('{{.ClientID}}')">
-                                <span class="detail-icon">💾</span>
-                                <span class="backup-text">View Backups</span>
+                                <span class="detail-icon">🔄</span>
+                                <span class="backup-text">View Restore Options</span>
                                 <span class="toggle-arrow">▶</span>
                             </button>
                         </div>
@@ -558,7 +558,7 @@
                 // Expandir
                 backupSection.style.display = 'block';
                 arrow.classList.add('expanded');
-                buttonText.textContent = 'Hide Backups';
+                buttonText.textContent = 'Hide Restore Options';
 
                 // Carregar dados se ainda não foram carregados
                 if (!backupCache.has(clientId)) {
@@ -568,7 +568,7 @@
                 // Colapsar
                 backupSection.style.display = 'none';
                 arrow.classList.remove('expanded');
-                buttonText.textContent = 'View Backups';
+                buttonText.textContent = 'View Restore Options';
             }
         }
 
@@ -577,7 +577,7 @@
             const backupContent = document.querySelector(`#backup-${clientId} .backup-content`);
 
             try {
-                const response = await fetch(`/api/client/${clientId}/generations`);
+                const response = await fetch(`/api/client/${clientId}/restore-options`);
 
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -602,52 +602,115 @@
         function renderBackupData(clientId, data) {
             const backupContent = document.querySelector(`#backup-${clientId} .backup-content`);
 
-            if (!data.generations || data.generations.length === 0) {
+            if (!data.restoreOptions || data.restoreOptions.length === 0) {
                 backupContent.innerHTML = `
                     <div class="backup-error">
-                        No backup generations found for this client
+                        No backup options found for this client
                     </div>
                 `;
                 return;
             }
 
-            let html = '';
-            data.generations.forEach((generation, index) => {
-                const generationId = `gen-${clientId}-${index}`;
+            // Agrupar opções por tipo
+            const byType = data.restoreOptions.reduce((acc, option) => {
+                if (!acc[option.type]) acc[option.type] = [];
+                acc[option.type].push(option);
+                return acc;
+            }, {});
+
+            let html = `
+                <div style="margin-bottom: 12px; padding: 8px; background: #f6f8fa; border-radius: 4px; border: 1px solid #d0d7de;">
+                    <div style="font-size: 11px; color: #24292f; font-weight: 500;">📊 Backup Status</div>
+                    <div style="font-size: 10px; color: #656d76; margin-top: 2px;">
+                        Total: ${data.totalOptions} options | Latest: ${data.latestBackup}
+                    </div>
+                </div>
+            `;
+
+            // Renderizar S3 generations primeiro
+            if (byType.generation) {
+                const s3Generations = byType.generation.filter(g => g.description.includes('S3'));
+                const localGenerations = byType.generation.filter(g => !g.description.includes('S3') || g.description.includes('local'));
+
+                if (s3Generations.length > 0) {
+                    const generationId = `s3-gen-${clientId}`;
+                    html += `
+                        <div class="generation-item">
+                            <div class="generation-header" onclick="toggleGeneration('${generationId}')">
+                                <div class="generation-info">
+                                    <div class="generation-id">🌐 S3 Generations (${s3Generations.length})</div>
+                                    <div class="generation-dates">Source of truth - Remote backups</div>
+                                </div>
+                                <span class="generation-arrow" id="arrow-${generationId}">▶</span>
+                            </div>
+                            <div class="snapshots-list" id="snapshots-${generationId}" style="display: none;">
+                                ${renderRestoreOptions(s3Generations)}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                if (localGenerations.length > 0) {
+                    const generationId = `local-gen-${clientId}`;
+                    html += `
+                        <div class="generation-item">
+                            <div class="generation-header" onclick="toggleGeneration('${generationId}')">
+                                <div class="generation-info">
+                                    <div class="generation-id">💾 Local Generations (${localGenerations.length})</div>
+                                    <div class="generation-dates">Local cache + S3 available</div>
+                                </div>
+                                <span class="generation-arrow" id="arrow-${generationId}">▶</span>
+                            </div>
+                            <div class="snapshots-list" id="snapshots-${generationId}" style="display: none;">
+                                ${renderRestoreOptions(localGenerations)}
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            // Renderizar WAL files (point-in-time)
+            if (byType.wal) {
+                const generationId = `wal-${clientId}`;
                 html += `
                     <div class="generation-item">
                         <div class="generation-header" onclick="toggleGeneration('${generationId}')">
                             <div class="generation-info">
-                                <div class="generation-id">Generation: ${generation.id}</div>
-                                <div class="generation-dates">
-                                    Created: ${formatDate(generation.created)} | Updated: ${formatDate(generation.updated)}
-                                </div>
+                                <div class="generation-id">⏱️ Point-in-Time Recovery (${byType.wal.length})</div>
+                                <div class="generation-dates">WAL files for precise restore</div>
                             </div>
                             <span class="generation-arrow" id="arrow-${generationId}">▶</span>
                         </div>
                         <div class="snapshots-list" id="snapshots-${generationId}" style="display: none;">
-                            ${renderSnapshots(generation.snapshots)}
+                            ${renderRestoreOptions(byType.wal)}
                         </div>
                     </div>
                 `;
-            });
+            }
 
             backupContent.innerHTML = html;
         }
 
-        // Função para renderizar snapshots
-        function renderSnapshots(snapshots) {
-            if (!snapshots || snapshots.length === 0) {
-                return '<div class="backup-error">No snapshots found</div>';
+        // Função para renderizar opções de restore
+        function renderRestoreOptions(options) {
+            if (!options || options.length === 0) {
+                return '<div class="backup-error">No restore options found</div>';
             }
 
-            return snapshots.map(snapshot => `
-                <div class="snapshot-item">
-                    <div class="snapshot-info">
-                        <div class="snapshot-id">${snapshot.id}</div>
-                        <div class="snapshot-date">${formatDate(snapshot.created)}</div>
+            return options.map(option => `
+                <div class="snapshot-item" style="margin-bottom: 8px; padding: 8px; border: 1px solid #d0d7de; border-radius: 4px;">
+                    <div class="snapshot-info" style="margin-bottom: 6px;">
+                        <div class="snapshot-id" style="font-size: 11px; font-weight: 500;">${option.description}</div>
+                        <div class="snapshot-date" style="font-size: 9px; color: #656d76;">
+                            📅 ${formatDate(option.timestamp)} ${option.size !== '-' ? '• ' + option.size : ''}
+                        </div>
                     </div>
-                    <div class="snapshot-size">${snapshot.size}</div>
+                    <div style="background: #f6f8fa; padding: 4px 6px; border-radius: 3px; border: 1px solid #d0d7de;">
+                        <div style="font-size: 9px; color: #656d76; margin-bottom: 2px;">💻 Restore Command:</div>
+                        <div style="font-size: 8px; color: #0969da; font-family: monospace; word-break: break-all;">
+                            ${option.command}
+                        </div>
+                    </div>
                 </div>
             `).join('');
         }

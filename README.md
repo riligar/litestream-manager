@@ -1,6 +1,6 @@
 # Litestream Manager
 
-Automatic SQLite backup system with multi-client support based on GUID.
+Automatic SQLite backup system with multi-client support based on GUID with [litestream](https://github.com/benbjohnson/litestream)
 
 ## 🔄 How It Works
 
@@ -63,8 +63,8 @@ export AWS_ACCESS_KEY_ID=your-access-key
 export AWS_SECRET_ACCESS_KEY=your-secret-key
 
 # Create directory and start
-mkdir -p data/clients
-./bin/litestream-manager -watch-dir "data/clients" -bucket "your-s3-bucket"
+mkdir -p data
+./bin/litestream-manager -watch-dir "data" -bucket "applications-backups-prod"
 
 # Dashboard: http://localhost:8080
 ```
@@ -83,10 +83,10 @@ mkdir -p data/clients
 
 ```bash
 # Add client (GUID required: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
-touch data/clients/12345678-1234-5678-9abc-123456789012.db
+touch data/12345678-1234-5678-9abc-123456789012.db
 
 # Remove client
-rm data/clients/12345678-1234-5678-9abc-123456789012.db
+rm data/12345678-1234-5678-9abc-123456789012.db
 
 # Multiple environments
 ./bin/litestream-manager -watch-dir "data/prod" -bucket "prod-backups"
@@ -97,7 +97,7 @@ rm data/clients/12345678-1234-5678-9abc-123456789012.db
 
 ### Local
 ```
-data/clients/
+data/
 ├── 12345678-1234-5678-9abc-123456789012.db
 ├── 98765432-4321-8765-cba9-876543210987.db
 └── abcdef01-2345-6789-abcd-ef0123456789.db

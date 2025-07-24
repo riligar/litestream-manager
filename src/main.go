@@ -11,10 +11,8 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -38,16 +36,20 @@ type filteredWriter struct {
 func (fw *filteredWriter) Write(p []byte) (n int, err error) {
 	msg := string(p)
 	
-	// Filtra mensagens técnicas do Litestream (mantém apenas logs amigáveis)
+	// Permite logs importantes de snapshot, generation e backup
+	if strings.Contains(msg, "snapshot") || 
+		strings.Contains(msg, "generation") || 
+		strings.Contains(msg, "backup") ||
+		strings.Contains(msg, "replicate") {
+		return fw.writer.Write(p) // Permite logs de backup/snapshot/generation
+	}
+	
+	// Filtra apenas mensagens técnicas realmente desnecessárias
 	if strings.Contains(msg, "wal header mismatch") ||
 		strings.Contains(msg, "cannot determine last wal position") ||
 		strings.Contains(msg, "sync error") ||
 		strings.Contains(msg, "init:") ||
-		strings.Contains(msg, "restor") ||
-		strings.Contains(msg, "snapshot") ||
-		strings.Contains(msg, "generation") ||
 		strings.Contains(msg, ".db-litestream/") ||
-		strings.Contains(msg, "generations/") ||
 		strings.Contains(msg, "/wal/") {
 		return len(p), nil // Descarta mensagem técnica
 	}
@@ -122,6 +124,7 @@ type GenerationData struct {
 	ID       string        `json:"id"`
 	Created  string        `json:"created"`
 	Updated  string        `json:"updated"`
+	Source   string        `json:"source"`    // "s3" ou "local"
 	Snapshots []SnapshotData `json:"snapshots,omitempty"`
 }
 
@@ -130,110 +133,342 @@ type SnapshotData struct {
 	ID      string `json:"id"`
 	Created string `json:"created"`
 	Size    string `json:"size"`
+	Source  string `json:"source"`    // "s3" ou "local"
 }
 
-// getClientGenerations obtém gerações disponíveis para um cliente
-func getClientGenerations(bucket, clientID string) ([]GenerationData, error) {
-	s3Path := fmt.Sprintf("s3://%s/databases/%s", bucket, clientID)
-	
-	cmd := exec.Command("litestream", "generations", s3Path)
-	
-	// Adicionar GOPATH ao PATH para encontrar litestream
-	if goPath := os.Getenv("GOPATH"); goPath != "" {
-		currentPath := os.Getenv("PATH")
-		cmd.Env = append(os.Environ(), fmt.Sprintf("PATH=%s:%s/bin", currentPath, goPath))
-	} else if homeDir := os.Getenv("HOME"); homeDir != "" {
-		currentPath := os.Getenv("PATH")
-		cmd.Env = append(os.Environ(), fmt.Sprintf("PATH=%s:%s/go/bin", currentPath, homeDir))
-	}
-	
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get generations: %w", err)
-	}
-	
-	return parseGenerations(string(output))
+// RestoreOption representa uma opção específica de restore
+type RestoreOption struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`        // "generation", "snapshot", "wal"
+	Timestamp   string `json:"timestamp"`
+	Size        string `json:"size"`
+	Description string `json:"description"`
+	Command     string `json:"command"`     // Comando litestream para restaurar
 }
 
-// getClientSnapshots obtém snapshots de uma geração específica
-func getClientSnapshots(bucket, clientID, generationID string) ([]SnapshotData, error) {
-	s3Path := fmt.Sprintf("s3://%s/databases/%s", bucket, clientID)
-	
-	cmd := exec.Command("litestream", "snapshots", s3Path, "-generation", generationID)
-	
-	// Adicionar GOPATH ao PATH para encontrar litestream
-	if goPath := os.Getenv("GOPATH"); goPath != "" {
-		currentPath := os.Getenv("PATH")
-		cmd.Env = append(os.Environ(), fmt.Sprintf("PATH=%s:%s/bin", currentPath, goPath))
-	} else if homeDir := os.Getenv("HOME"); homeDir != "" {
-		currentPath := os.Getenv("PATH")
-		cmd.Env = append(os.Environ(), fmt.Sprintf("PATH=%s:%s/go/bin", currentPath, homeDir))
-	}
-	
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get snapshots: %w", err)
-	}
-	
-	return parseSnapshots(string(output))
+// RestoreOptionsData todas as opções de restore disponíveis para um cliente
+type RestoreOptionsData struct {
+	ClientID       string          `json:"clientId"`
+	TotalOptions   int            `json:"totalOptions"`
+	LatestBackup   string         `json:"latestBackup"`
+	RestoreOptions []RestoreOption `json:"restoreOptions"`
 }
 
-// parseGenerations parseia output do comando litestream generations
-func parseGenerations(output string) ([]GenerationData, error) {
+// getClientGenerations obtém gerações disponíveis para um cliente lendo dados reais dos arquivos
+func (dm *DatabaseManager) getClientGenerations(clientID string) ([]GenerationData, error) {
+	dm.mutex.RLock()
+	defer dm.mutex.RUnlock()
+	
+	// Busca a instância do litestream.DB para o cliente
+	lsdb, exists := dm.databases[clientID]
+	if !exists {
+		return nil, fmt.Errorf("client not found: %s", clientID)
+	}
+	
+	// Caminho para o diretório .db-litestream (note o ponto no início)
+	litestreamDir := fmt.Sprintf(".%s-litestream", filepath.Base(lsdb.Path()))
+	litestreamFullPath := filepath.Join(filepath.Dir(lsdb.Path()), litestreamDir)
+	generationsDir := filepath.Join(litestreamFullPath, "generations")
+	
+	// Verificar se o diretório existe
+	if _, err := os.Stat(generationsDir); os.IsNotExist(err) {
+		return []GenerationData{}, nil // Retorna vazio se não há generations
+	}
+	
 	var generations []GenerationData
-	lines := strings.Split(strings.TrimSpace(output), "\n")
 	
-	// Skip header line
-	if len(lines) <= 1 {
-		return generations, nil
+	// Ler diretórios de generations
+	entries, err := os.ReadDir(generationsDir)
+	if err != nil {
+		log.Printf("⚠️  Error reading generations directory for client %s: %v", clientID, err)
+		return []GenerationData{}, nil
 	}
 	
-	for _, line := range lines[1:] {
-		if strings.TrimSpace(line) == "" {
+	for _, entry := range entries {
+		if !entry.IsDir() {
 			continue
 		}
 		
-		// Parse generation line: generation_id    created_at    updated_at
-		fields := regexp.MustCompile(`\s+`).Split(strings.TrimSpace(line), -1)
-		if len(fields) >= 3 {
-			generations = append(generations, GenerationData{
-				ID:      fields[0],
-				Created: fields[1],
-				Updated: fields[2],
-			})
+		generationID := entry.Name()
+		generationPath := filepath.Join(generationsDir, generationID)
+		
+		// Obter informações da generation
+		info, err := entry.Info()
+		if err != nil {
+			continue
 		}
+		
+		// Buscar o WAL mais recente para obter timestamp atualizado
+		walDir := filepath.Join(generationPath, "wal")
+		var latestWALTime time.Time = info.ModTime()
+		
+		if walEntries, err := os.ReadDir(walDir); err == nil {
+			for _, walEntry := range walEntries {
+				if strings.HasSuffix(walEntry.Name(), ".wal") {
+					if walInfo, err := walEntry.Info(); err == nil {
+						if walInfo.ModTime().After(latestWALTime) {
+							latestWALTime = walInfo.ModTime()
+						}
+					}
+				}
+			}
+		}
+		
+		generation := GenerationData{
+			ID:      generationID,
+			Created: info.ModTime().Format("2006-01-02 15:04:05"),
+			Updated: latestWALTime.Format("2006-01-02 15:04:05"),
+			Source:  "local", // Indicando que os dados vêm dos arquivos locais
+		}
+		
+		generations = append(generations, generation)
 	}
+	
+	// Ordenar por data de criação (mais recente primeiro)
+	sort.Slice(generations, func(i, j int) bool {
+		return generations[i].Created > generations[j].Created
+	})
 	
 	return generations, nil
 }
 
-// parseSnapshots parseia output do comando litestream snapshots
-func parseSnapshots(output string) ([]SnapshotData, error) {
+// getClientSnapshots obtém snapshots de uma geração específica lendo dados reais dos arquivos WAL
+func (dm *DatabaseManager) getClientSnapshots(clientID, generationID string) ([]SnapshotData, error) {
+	dm.mutex.RLock()
+	defer dm.mutex.RUnlock()
+	
+	// Busca a instância do litestream.DB para o cliente
+	lsdb, exists := dm.databases[clientID]
+	if !exists {
+		return nil, fmt.Errorf("client not found: %s", clientID)
+	}
+	
+	// Caminho para o diretório WAL da generation específica (note o ponto no início)
+	litestreamDir := fmt.Sprintf(".%s-litestream", filepath.Base(lsdb.Path()))
+	litestreamFullPath := filepath.Join(filepath.Dir(lsdb.Path()), litestreamDir)
+	walDir := filepath.Join(litestreamFullPath, "generations", generationID, "wal")
+	
+	// Verificar se o diretório existe
+	if _, err := os.Stat(walDir); os.IsNotExist(err) {
+		return []SnapshotData{}, nil // Retorna vazio se não há WAL files
+	}
+	
 	var snapshots []SnapshotData
-	lines := strings.Split(strings.TrimSpace(output), "\n")
 	
-	// Skip header line
-	if len(lines) <= 1 {
-		return snapshots, nil
+	// Ler arquivos WAL
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		log.Printf("⚠️  Error reading WAL directory for client %s generation %s: %v", clientID, generationID, err)
+		return []SnapshotData{}, nil
 	}
 	
-	for _, line := range lines[1:] {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		
-		// Parse snapshot line: snapshot_id    created_at    size
-		fields := regexp.MustCompile(`\s+`).Split(strings.TrimSpace(line), -1)
-		if len(fields) >= 3 {
-			snapshots = append(snapshots, SnapshotData{
-				ID:      fields[0],
-				Created: fields[1],
-				Size:    fields[2],
-			})
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".wal") {
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			
+			// Converter bytes para formato amigável
+			size := info.Size()
+			var sizeStr string
+			if size < 1024 {
+				sizeStr = fmt.Sprintf("%dB", size)
+			} else if size < 1024*1024 {
+				sizeStr = fmt.Sprintf("%.1fKB", float64(size)/1024)
+			} else {
+				sizeStr = fmt.Sprintf("%.1fMB", float64(size)/(1024*1024))
+			}
+			
+			snapshot := SnapshotData{
+				ID:      strings.TrimSuffix(entry.Name(), ".wal"),
+				Created: info.ModTime().Format("2006-01-02 15:04:05"),
+				Size:    sizeStr,
+				Source:  "local", // Indicando que os dados vêm dos arquivos locais
+			}
+			
+			snapshots = append(snapshots, snapshot)
 		}
 	}
+	
+	// Ordenar por nome (ordem cronológica dos WAL files)
+	sort.Slice(snapshots, func(i, j int) bool {
+		return snapshots[i].ID < snapshots[j].ID
+	})
 	
 	return snapshots, nil
+}
+
+// getClientRestoreOptions lista todas as opções de restore disponíveis para um cliente
+// Tenta S3 primeiro, depois fallback para dados locais
+func (dm *DatabaseManager) getClientRestoreOptions(clientID string) (*RestoreOptionsData, error) {
+	dm.mutex.RLock()
+	defer dm.mutex.RUnlock()
+	
+	// Busca a instância do litestream.DB para o cliente
+	lsdb, exists := dm.databases[clientID]
+	if !exists {
+		return nil, fmt.Errorf("client not found: %s", clientID)
+	}
+	
+	var restoreOptions []RestoreOption
+	var latestTimestamp time.Time
+	var s3Available bool = false
+	
+	// Tentar buscar dados do S3 primeiro usando a biblioteca litestream
+	if len(lsdb.Replicas) > 0 {
+		replica := lsdb.Replicas[0]
+		ctx := context.Background()
+		
+		// Tentar usar CalcRestoreTarget para verificar se S3 está acessível
+		opt := litestream.NewRestoreOptions()
+		if generation, _, err := replica.CalcRestoreTarget(ctx, opt); err == nil && generation != "" {
+			s3Available = true
+			log.Printf("🌐 S3 available for client %s, generation: %s", clientID, generation)
+			
+			// Adicionar opção de restore S3 (mais recente disponível)
+			restoreOptions = append(restoreOptions, RestoreOption{
+				ID:          generation,
+				Type:        "generation",
+				Timestamp:   time.Now().Format("2006-01-02 15:04:05"), // Timestamp aproximado
+				Size:        "-",
+				Description: fmt.Sprintf("Latest S3 generation %s", generation[:8]),
+				Command:     fmt.Sprintf("litestream restore -o restored.db s3://%s/databases/%s", dm.bucket, clientID),
+			})
+			
+			// Adicionar opção específica de generation
+			restoreOptions = append(restoreOptions, RestoreOption{
+				ID:          generation + "-specific",
+				Type:        "generation",
+				Timestamp:   time.Now().Add(-time.Hour).Format("2006-01-02 15:04:05"), // Timestamp aproximado
+				Size:        "-",
+				Description: fmt.Sprintf("S3 generation %s (specific)", generation[:8]),
+				Command:     fmt.Sprintf("litestream restore -generation %s -o restored.db s3://%s/databases/%s", generation, dm.bucket, clientID),
+			})
+			
+			latestTimestamp = time.Now()
+		} else {
+			log.Printf("⚠️  S3 not available for client %s: %v", clientID, err)
+		}
+	}
+	
+	// Buscar dados locais como fallback/complemento
+	litestreamDir := fmt.Sprintf(".%s-litestream", filepath.Base(lsdb.Path()))
+	litestreamFullPath := filepath.Join(filepath.Dir(lsdb.Path()), litestreamDir)
+	generationsDir := filepath.Join(litestreamFullPath, "generations")
+	
+	// Verificar se o diretório local existe
+	if _, err := os.Stat(generationsDir); err == nil {
+		// Ler diretórios de generations locais
+		entries, err := os.ReadDir(generationsDir)
+		if err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() {
+					continue
+				}
+				
+				generationID := entry.Name()
+				generationPath := filepath.Join(generationsDir, generationID)
+				walDir := filepath.Join(generationPath, "wal")
+				
+				// Obter informações da generation
+				info, err := entry.Info()
+				if err != nil {
+					continue
+				}
+				
+				// Adicionar opção de restore para a generation local
+				genTimestamp := info.ModTime()
+				if genTimestamp.After(latestTimestamp) {
+					latestTimestamp = genTimestamp
+				}
+				
+				sourceLabel := "local"
+				if s3Available {
+					sourceLabel = "local+s3"
+				}
+				
+				restoreOptions = append(restoreOptions, RestoreOption{
+					ID:          generationID + "-local",
+					Type:        "generation",
+					Timestamp:   genTimestamp.Format("2006-01-02 15:04:05"),
+					Size:        "-",
+					Description: fmt.Sprintf("Local generation %s (%s)", generationID[:8], sourceLabel),
+					Command:     fmt.Sprintf("litestream restore -generation %s -o restored.db s3://%s/databases/%s", generationID, dm.bucket, clientID),
+				})
+				
+				// Listar WAL files individuais para restore point-in-time
+				if walEntries, err := os.ReadDir(walDir); err == nil {
+					for _, walEntry := range walEntries {
+						if !walEntry.IsDir() && strings.HasSuffix(walEntry.Name(), ".wal") {
+							walInfo, err := walEntry.Info()
+							if err != nil {
+								continue
+							}
+							
+							walTimestamp := walInfo.ModTime()
+							if walTimestamp.After(latestTimestamp) {
+								latestTimestamp = walTimestamp
+							}
+							
+							// Converter bytes para formato amigável
+							size := walInfo.Size()
+							var sizeStr string
+							if size < 1024 {
+								sizeStr = fmt.Sprintf("%dB", size)
+							} else if size < 1024*1024 {
+								sizeStr = fmt.Sprintf("%.1fKB", float64(size)/1024)
+							} else {
+								sizeStr = fmt.Sprintf("%.1fMB", float64(size)/(1024*1024))
+							}
+							
+							walID := strings.TrimSuffix(walEntry.Name(), ".wal")
+							restoreOptions = append(restoreOptions, RestoreOption{
+								ID:          walID + "-local",
+								Type:        "wal",
+								Timestamp:   walTimestamp.Format("2006-01-02 15:04:05"),
+								Size:        sizeStr,
+								Description: fmt.Sprintf("Point-in-time WAL %s (%s)", walID, sourceLabel),
+								Command:     fmt.Sprintf("litestream restore -timestamp \"%s\" -o restored.db s3://%s/databases/%s", walTimestamp.Format("2006-01-02T15:04:05Z"), dm.bucket, clientID),
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Se não há dados nem no S3 nem local
+	if len(restoreOptions) == 0 {
+		return &RestoreOptionsData{
+			ClientID:       clientID,
+			TotalOptions:   0,
+			LatestBackup:   "No backups available",
+			RestoreOptions: []RestoreOption{},
+		}, nil
+	}
+	
+	// Ordenar por timestamp (mais recente primeiro)
+	sort.Slice(restoreOptions, func(i, j int) bool {
+		return restoreOptions[i].Timestamp > restoreOptions[j].Timestamp
+	})
+	
+	latestBackupStr := "No backups available"
+	if !latestTimestamp.IsZero() {
+		latestBackupStr = latestTimestamp.Format("2006-01-02 15:04:05")
+		if s3Available {
+			latestBackupStr += " (S3+Local)"
+		} else {
+			latestBackupStr += " (Local only)"
+		}
+	}
+	
+	return &RestoreOptionsData{
+		ClientID:       clientID,
+		TotalOptions:   len(restoreOptions),
+		LatestBackup:   latestBackupStr,
+		RestoreOptions: restoreOptions,
+	}, nil
 }
 
 func main() {
@@ -769,12 +1004,13 @@ func startStatusServer(dm *DatabaseManager, addr string) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/client/")
 		parts := strings.Split(path, "/")
 		
-		if len(parts) < 2 || parts[1] != "generations" {
-			http.Error(w, "Invalid path. Use /api/client/{clientID}/generations", http.StatusBadRequest)
+		if len(parts) < 2 || (parts[1] != "generations" && parts[1] != "restore-options") {
+			http.Error(w, "Invalid path. Use /api/client/{clientID}/generations or /api/client/{clientID}/restore-options", http.StatusBadRequest)
 			return
 		}
 		
 		clientID := parts[0]
+		endpoint := parts[1]
 		
 		dm.mutex.RLock()
 		_, exists := dm.clients[clientID]
@@ -787,8 +1023,24 @@ func startStatusServer(dm *DatabaseManager, addr string) {
 		
 		w.Header().Set("Content-Type", "application/json")
 		
+		if endpoint == "restore-options" {
+			// Endpoint para listar todas as opções de restore
+			restoreData, err := dm.getClientRestoreOptions(clientID)
+			if err != nil {
+				log.Printf("⚠️  Failed to get restore options for client %s: %v", clientID, err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			
+			if err := json.NewEncoder(w).Encode(restoreData); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+		
+		// Endpoint original para generations
 		// Obter gerações
-		generations, err := getClientGenerations(dm.bucket, clientID)
+		generations, err := dm.getClientGenerations(clientID)
 		if err != nil {
 			log.Printf("⚠️  Failed to get generations for client %s: %v", clientID, err)
 			// Retorna array vazio em caso de erro para não quebrar a UI
@@ -797,7 +1049,7 @@ func startStatusServer(dm *DatabaseManager, addr string) {
 		
 		// Obter snapshots para cada geração
 		for i := range generations {
-			snapshots, err := getClientSnapshots(dm.bucket, clientID, generations[i].ID)
+			snapshots, err := dm.getClientSnapshots(clientID, generations[i].ID)
 			if err != nil {
 				log.Printf("⚠️  Failed to get snapshots for client %s generation %s: %v", 
 					clientID, generations[i].ID, err)
